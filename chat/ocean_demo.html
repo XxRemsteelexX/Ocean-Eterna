@@ -1,0 +1,1630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OceanEterna AI - Infinite Context RAG Demo</title>
+    <style>
+        :root {
+            --primary: #0ea5e9;
+            --primary-dark: #0284c7;
+            --accent: #8b5cf6;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --bg-card-hover: #334155;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: #334155;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-dark) 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-icon {
+            font-size: 32px;
+            animation: wave 2s ease-in-out infinite;
+        }
+
+        @keyframes wave {
+            0%, 100% { transform: rotate(0deg); }
+            25% { transform: rotate(-10deg); }
+            75% { transform: rotate(10deg); }
+        }
+
+        .logo h1 {
+            font-size: 24px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .logo-subtitle {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .status-badges {
+            display: flex;
+            gap: 12px;
+        }
+
+        .badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-success {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--success);
+            border: 1px solid var(--success);
+        }
+
+        .badge-primary {
+            background: rgba(14, 165, 233, 0.2);
+            color: var(--primary);
+            border: 1px solid var(--primary);
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.8); }
+        }
+
+        /* Main Layout */
+        .main-container {
+            display: grid;
+            grid-template-columns: 320px 1fr 300px;
+            height: calc(100vh - 73px);
+            gap: 1px;
+            background: var(--border);
+            overflow: hidden;
+        }
+
+        /* Left Panel - Stats & Index */
+        .left-panel {
+            background: var(--bg-card);
+            padding: 20px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            height: 100%;
+            min-height: 0;
+        }
+
+        .panel-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        /* Big Stats */
+        .big-stat {
+            background: var(--bg-dark);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            border: 1px solid var(--border);
+        }
+
+        .big-stat-value {
+            font-size: 36px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .big-stat-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* Speed Comparison */
+        .speed-comparison {
+            background: var(--bg-dark);
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid var(--border);
+        }
+
+        .speed-bar-container {
+            margin-top: 12px;
+        }
+
+        .speed-bar-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+
+        .speed-bar {
+            height: 24px;
+            background: var(--bg-card);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+
+        .speed-bar-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.5s ease;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 8px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .speed-bar-fill.search {
+            background: linear-gradient(90deg, var(--success) 0%, #34d399 100%);
+        }
+
+        .speed-bar-fill.llm {
+            background: linear-gradient(90deg, var(--warning) 0%, #fbbf24 100%);
+        }
+
+        /* Compression Stat */
+        .compression-display {
+            background: linear-gradient(135deg, var(--accent) 0%, var(--primary) 100%);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .compression-value {
+            font-size: 28px;
+            font-weight: 700;
+        }
+
+        .compression-label {
+            font-size: 11px;
+            opacity: 0.8;
+        }
+
+        /* Chapter Guide */
+        .chapter-guide {
+            background: var(--bg-dark);
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid var(--border);
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .chunk-type-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .chunk-type-row:last-child {
+            border-bottom: none;
+        }
+
+        .chunk-type-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+
+        .chunk-type-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+
+        .chunk-type-icon.doc { background: rgba(14, 165, 233, 0.2); }
+        .chunk-type-icon.chat { background: rgba(139, 92, 246, 0.2); }
+        .chunk-type-icon.code { background: rgba(16, 185, 129, 0.2); }
+        .chunk-type-icon.fix { background: rgba(245, 158, 11, 0.2); }
+        .chunk-type-icon.feat { background: rgba(236, 72, 153, 0.2); }
+
+        .chunk-type-count {
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Center Panel - Chat */
+        .chat-panel {
+            background: var(--bg-dark);
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            min-height: 0;
+        }
+
+        .message {
+            display: flex;
+            gap: 12px;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            flex-direction: row-reverse;
+        }
+
+        .message-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        .message.user .message-avatar {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
+        }
+
+        .message.assistant .message-avatar {
+            background: linear-gradient(135deg, var(--success) 0%, #34d399 100%);
+        }
+
+        .message-content {
+            max-width: 70%;
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 14px 18px;
+            border: 1px solid var(--border);
+        }
+
+        .message.user .message-content {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            border: none;
+        }
+
+        .message-text {
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+
+        /* Step 26: Streaming cursor animation */
+        .streaming-text::after {
+            content: '▋';
+            animation: blink 0.7s infinite;
+            color: var(--accent);
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        .message-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 8px;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .message.user .message-meta {
+            color: rgba(255,255,255,0.7);
+        }
+
+        .message-sources {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+            font-size: 12px;
+        }
+
+        .source-chip {
+            display: inline-block;
+            background: var(--bg-dark);
+            padding: 4px 10px;
+            border-radius: 12px;
+            margin: 2px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--primary);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .source-chip:hover {
+            background: var(--primary);
+            color: white;
+        }
+
+        .speed-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .speed-badge.fast {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--success);
+        }
+
+        .speed-badge.slow {
+            background: rgba(245, 158, 11, 0.2);
+            color: var(--warning);
+        }
+
+        /* Input Area */
+        .input-area {
+            padding: 20px;
+            border-top: 1px solid var(--border);
+            background: var(--bg-card);
+            flex-shrink: 0;
+        }
+
+        .input-container {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .chat-input {
+            flex: 1;
+            background: var(--bg-dark);
+            border: 2px solid var(--border);
+            border-radius: 12px;
+            padding: 14px 18px;
+            color: var(--text);
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .chat-input:focus {
+            border-color: var(--primary);
+        }
+
+        .chat-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .btn {
+            padding: 14px 20px;
+            border-radius: 12px;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(14, 165, 233, 0.4);
+        }
+
+        .btn-secondary {
+            background: var(--bg-dark);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-card-hover);
+        }
+
+        .btn-icon {
+            width: 48px;
+            height: 48px;
+            padding: 0;
+            justify-content: center;
+        }
+
+        /* Right Panel - Actions & Info */
+        .right-panel {
+            background: var(--bg-card);
+            padding: 20px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            height: 100%;
+            min-height: 0;
+        }
+
+        .action-card {
+            background: var(--bg-dark);
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid var(--border);
+        }
+
+        .action-card h4 {
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .file-upload-area {
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 24px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .file-upload-area:hover {
+            border-color: var(--primary);
+            background: rgba(14, 165, 233, 0.05);
+        }
+
+        .file-upload-area.dragover {
+            border-color: var(--primary);
+            background: rgba(14, 165, 233, 0.1);
+        }
+
+        .upload-icon {
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
+
+        .upload-text {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .upload-formats {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* System Stats */
+        .system-stat {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+        }
+
+        .system-stat-label {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .system-stat-value {
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .progress-mini {
+            width: 60px;
+            height: 6px;
+            background: var(--bg-card);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-left: 8px;
+        }
+
+        .progress-mini-fill {
+            height: 100%;
+            background: var(--primary);
+            transition: width 0.3s;
+        }
+
+        /* Tell Me More Button */
+        .tell-more-btn {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, var(--accent) 0%, var(--primary) 100%);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .tell-more-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+        }
+
+        .tell-more-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state-icon {
+            font-size: 64px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        /* Typing Indicator */
+        .typing-indicator {
+            display: flex;
+            gap: 4px;
+            padding: 8px 0;
+        }
+
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--text-muted);
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-8px); }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-dark);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-muted);
+        }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .main-container {
+                grid-template-columns: 280px 1fr 260px;
+            }
+        }
+
+        @media (max-width: 900px) {
+            .main-container {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto 1fr auto;
+            }
+
+            .left-panel, .right-panel {
+                flex-direction: row;
+                flex-wrap: wrap;
+                max-height: 200px;
+            }
+        }
+
+        /* Animations */
+        .animate-number {
+            transition: all 0.3s ease;
+        }
+
+        .flash {
+            animation: flash 0.5s ease;
+        }
+
+        @keyframes flash {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="logo">
+            <span class="logo-icon">🌊</span>
+            <div>
+                <h1>OceanEterna AI</h1>
+                <div class="logo-subtitle">Infinite Context RAG System</div>
+            </div>
+        </div>
+        <div class="status-badges">
+            <div class="badge badge-success">
+                <span class="pulse-dot"></span>
+                <span>CPU Only</span>
+            </div>
+            <div class="badge badge-primary">
+                <span class="pulse-dot"></span>
+                <span id="connectionStatus">Connecting...</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- Left Panel - Stats -->
+        <div class="left-panel">
+            <div class="panel-title">Index Stats</div>
+
+            <!-- Token Count -->
+            <div class="big-stat">
+                <div class="big-stat-value" id="tokenCount">0</div>
+                <div class="big-stat-label">Tokens Indexed</div>
+            </div>
+
+            <!-- Chunks Count -->
+            <div class="big-stat">
+                <div class="big-stat-value" id="chunkCount">0</div>
+                <div class="big-stat-label">Chunks Loaded</div>
+            </div>
+
+            <!-- Speed Comparison -->
+            <div class="speed-comparison">
+                <div class="panel-title">Speed Comparison</div>
+                <div class="speed-bar-container">
+                    <div class="speed-bar-label">
+                        <span>🔍 Search</span>
+                        <span id="searchTimeLabel">0ms</span>
+                    </div>
+                    <div class="speed-bar">
+                        <div class="speed-bar-fill search" id="searchBar" style="width: 5%">
+                            <span id="searchBarText"></span>
+                        </div>
+                    </div>
+
+                    <div class="speed-bar-label">
+                        <span>🤖 LLM</span>
+                        <span id="llmTimeLabel">0ms</span>
+                    </div>
+                    <div class="speed-bar">
+                        <div class="speed-bar-fill llm" id="llmBar" style="width: 50%">
+                            <span id="llmBarText"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Compression Ratio -->
+            <div class="compression-display">
+                <div class="compression-value" id="compressionRatio">147:1</div>
+                <div class="compression-label">Context Compression</div>
+            </div>
+
+            <!-- Chapter Guide -->
+            <div class="chapter-guide">
+                <div class="panel-title">Corpus Overview</div>
+                <div id="chapterGuide">
+                    <div class="chunk-type-row">
+                        <div class="chunk-type-label">
+                            <div class="chunk-type-icon doc">📄</div>
+                            <span>Documents</span>
+                        </div>
+                        <span class="chunk-type-count" id="docCount">0</span>
+                    </div>
+                    <div class="chunk-type-row">
+                        <div class="chunk-type-label">
+                            <div class="chunk-type-icon chat">💬</div>
+                            <span>Conversations</span>
+                        </div>
+                        <span class="chunk-type-count" id="chatCount">0</span>
+                    </div>
+                    <div class="chunk-type-row">
+                        <div class="chunk-type-label">
+                            <div class="chunk-type-icon code">💻</div>
+                            <span>Code</span>
+                        </div>
+                        <span class="chunk-type-count" id="codeCount">0</span>
+                    </div>
+                    <div class="chunk-type-row">
+                        <div class="chunk-type-label">
+                            <div class="chunk-type-icon fix">🔧</div>
+                            <span>Fixes</span>
+                        </div>
+                        <span class="chunk-type-count" id="fixCount">0</span>
+                    </div>
+                    <div class="chunk-type-row">
+                        <div class="chunk-type-label">
+                            <div class="chunk-type-icon feat">✨</div>
+                            <span>Features</span>
+                        </div>
+                        <span class="chunk-type-count" id="featCount">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center Panel - Chat -->
+        <div class="chat-panel">
+            <div class="messages-container" id="messages">
+                <div class="empty-state">
+                    <div class="empty-state-icon">🌊</div>
+                    <h2>Welcome to OceanEterna</h2>
+                    <p>Ask questions about your indexed documents</p>
+                    <p style="margin-top: 8px; font-size: 12px;">Search: ~40ms | Compression: 147:1 | CPU Only</p>
+                </div>
+            </div>
+
+            <div class="input-area">
+                <div class="input-container">
+                    <input
+                        type="text"
+                        class="chat-input"
+                        id="messageInput"
+                        placeholder="Ask anything about your documents..."
+                        onkeypress="handleKeyPress(event)"
+                    >
+                    <button class="btn btn-secondary btn-icon" onclick="document.getElementById('fileInput').click()" title="Add file">
+                        📎
+                    </button>
+                    <button class="btn btn-primary btn-icon" onclick="sendMessage()" id="sendBtn" title="Send">
+                        ➤
+                    </button>
+                </div>
+                <input type="file" id="fileInput" style="display: none" accept=".txt,.md,.json,.csv,.cpp,.py,.js" onchange="handleFileUpload(event)">
+            </div>
+        </div>
+
+        <!-- Right Panel - Actions -->
+        <div class="right-panel">
+            <div class="panel-title">Actions</div>
+
+            <!-- Tell Me More -->
+            <button class="tell-more-btn" id="tellMoreBtn" onclick="tellMeMore()" disabled>
+                <span>🔄</span>
+                <span>Tell Me More</span>
+                <span style="font-size: 10px; opacity: 0.7;">(No Re-Search)</span>
+            </button>
+
+            <!-- File Upload -->
+            <div class="action-card">
+                <h4>📁 Add to Index</h4>
+                <div class="file-upload-area" id="dropZone" onclick="document.getElementById('fileInput').click()">
+                    <div class="upload-icon">📄</div>
+                    <div class="upload-text">Drop small files here</div>
+                    <div class="upload-formats">< 10MB: .txt .md .json .csv .cpp .py .js</div>
+                </div>
+                <div style="margin-top: 12px;">
+                    <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;">Large files (paste path):</div>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="text" id="filePathInput" placeholder="/path/to/file.txt"
+                               style="flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--border);
+                                      background: var(--bg-dark); color: var(--text); font-size: 12px;">
+                        <button onclick="handleFilePathUpload()"
+                                style="padding: 8px 12px; border-radius: 6px; border: none;
+                                       background: var(--primary); color: white; cursor: pointer; font-size: 12px;">
+                            Add
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Stats -->
+            <div class="action-card">
+                <h4>⚙️ System</h4>
+                <div class="system-stat">
+                    <span class="system-stat-label">CPU</span>
+                    <div style="display: flex; align-items: center;">
+                        <span class="system-stat-value" id="cpuValue">0%</span>
+                        <div class="progress-mini">
+                            <div class="progress-mini-fill" id="cpuBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="system-stat">
+                    <span class="system-stat-label">RAM</span>
+                    <div style="display: flex; align-items: center;">
+                        <span class="system-stat-value" id="ramValue">0%</span>
+                        <div class="progress-mini">
+                            <div class="progress-mini-fill" id="ramBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="system-stat">
+                    <span class="system-stat-label">Database</span>
+                    <span class="system-stat-value" id="dbSize">0 MB</span>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="action-card">
+                <h4>🎛️ Controls</h4>
+                <button class="btn btn-secondary" style="width: 100%; margin-bottom: 8px;" onclick="clearChat()">
+                    🗑️ Clear Chat
+                </button>
+                <button class="btn btn-secondary" style="width: 100%; margin-bottom: 8px; color: var(--warning);" onclick="resetIndex()">
+                    🔄 Reset Index
+                </button>
+                <button class="btn btn-secondary" style="width: 100%; color: var(--danger);" onclick="clearDatabase()">
+                    💥 Clear Memory
+                </button>
+            </div>
+
+            <!-- Last Response Info -->
+            <div class="action-card" id="responseInfo" style="display: none;">
+                <h4>📊 Last Response</h4>
+                <div class="system-stat">
+                    <span class="system-stat-label">Search Time</span>
+                    <span class="system-stat-value speed-badge fast" id="lastSearchTime">0ms</span>
+                </div>
+                <div class="system-stat">
+                    <span class="system-stat-label">LLM Time</span>
+                    <span class="system-stat-value speed-badge slow" id="lastLlmTime">0ms</span>
+                </div>
+                <div class="system-stat">
+                    <span class="system-stat-label">Sources Used</span>
+                    <span class="system-stat-value" id="lastSourceCount">0</span>
+                </div>
+                <div class="system-stat">
+                    <span class="system-stat-label">Turn ID</span>
+                    <span class="system-stat-value" style="font-size: 10px;" id="lastTurnId">-</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let lastTurnId = null;
+        let lastSources = [];
+        let searchTimes = [];
+        let llmTimes = [];
+        const API_URL = 'http://localhost:8888';
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            updateStats();
+            loadChapterGuide();
+            setInterval(updateStats, 2000);
+            setupDragDrop();
+        });
+
+        // Handle Enter key
+        function handleKeyPress(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        // Step 26: Add streaming message element for progressive updates
+        function addStreamingMessage() {
+            const container = document.getElementById('messages');
+            const emptyState = container.querySelector('.empty-state');
+            if (emptyState) emptyState.remove();
+
+            const id = `stream-${Date.now()}`;
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message assistant';
+            msgDiv.id = id;
+            msgDiv.innerHTML = `
+                <div class="message-avatar">🤖</div>
+                <div class="message-content">
+                    <div class="message-text streaming-text"></div>
+                    <div class="message-sources-container" style="display:none;"></div>
+                    <div class="message-meta">
+                        <span>${new Date().toLocaleTimeString()}</span>
+                        <div class="speed-badges"></div>
+                    </div>
+                </div>
+            `;
+            container.appendChild(msgDiv);
+            container.scrollTop = container.scrollHeight;
+            return id;
+        }
+
+        // Step 26: Update streaming message with new token
+        function appendToStreamingMessage(id, token) {
+            const msgDiv = document.getElementById(id);
+            if (!msgDiv) return;
+            const textEl = msgDiv.querySelector('.streaming-text');
+            if (textEl) {
+                textEl.textContent += token;
+                const container = document.getElementById('messages');
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+
+        // Step 26: Finalize streaming message with metadata
+        function finalizeStreamingMessage(id, meta) {
+            const msgDiv = document.getElementById(id);
+            if (!msgDiv) return;
+
+            // Remove streaming class
+            const textEl = msgDiv.querySelector('.streaming-text');
+            if (textEl) textEl.classList.remove('streaming-text');
+
+            // Add speed badges
+            const badgesEl = msgDiv.querySelector('.speed-badges');
+            if (badgesEl && meta.searchTime !== undefined) {
+                badgesEl.innerHTML = `
+                    <span class="speed-badge fast">Search: ${meta.searchTime.toFixed(1)}ms</span>
+                    <span class="speed-badge slow">LLM: ${Math.round(meta.llmTime)}ms</span>
+                `;
+            }
+
+            // Add sources
+            if (meta.sources && meta.sources.length > 0) {
+                const sourcesContainer = msgDiv.querySelector('.message-sources-container');
+                if (sourcesContainer) {
+                    sourcesContainer.style.display = 'block';
+                    sourcesContainer.innerHTML = `
+                        <div class="message-sources">
+                            📎 Sources: ${meta.sources.map(s =>
+                                `<span class="source-chip" onclick="viewChunk('${s.chunk_id}')">${s.chunk_id}</span>`
+                            ).join('')}
+                        </div>
+                    `;
+                }
+            }
+        }
+
+        // Send message (with SSE streaming support)
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            if (!message) return;
+
+            addMessage('user', message);
+            input.value = '';
+
+            // Try streaming first, fallback to regular endpoint
+            try {
+                const response = await fetch(`${API_URL}/chat/stream`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question: message })
+                });
+
+                if (!response.ok) throw new Error('Streaming failed');
+
+                // Create streaming message element
+                const streamMsgId = addStreamingMessage();
+
+                let searchTime = 0;
+                let llmTime = 0;
+                let sources = [];
+                let turnId = null;
+                let fullAnswer = '';
+
+                // Parse SSE stream
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+
+                    // Process complete SSE events
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // Keep incomplete line in buffer
+
+                    let eventType = null;
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            eventType = line.substring(7).trim();
+                        } else if (line.startsWith('data: ')) {
+                            const data = line.substring(6);
+                            try {
+                                const parsed = JSON.parse(data);
+
+                                if (eventType === 'search') {
+                                    searchTime = parsed.search_time_ms || 0;
+                                    // Could show search indicator here
+                                } else if (eventType === 'done') {
+                                    llmTime = parsed.llm_time_ms || 0;
+                                    sources = parsed.sources || [];
+                                    turnId = parsed.turn_id;
+                                } else if (parsed.token) {
+                                    // Token event (no event type, just data)
+                                    fullAnswer += parsed.token;
+                                    appendToStreamingMessage(streamMsgId, parsed.token);
+                                }
+                            } catch (e) {
+                                // Ignore parse errors for incomplete chunks
+                            }
+                            eventType = null;
+                        }
+                    }
+                }
+
+                // Finalize message
+                finalizeStreamingMessage(streamMsgId, {
+                    searchTime: searchTime,
+                    llmTime: llmTime,
+                    sources: sources
+                });
+
+                // Store for "tell me more"
+                lastTurnId = turnId;
+                lastSources = sources;
+
+                // Update speed stats
+                searchTimes.push(searchTime);
+                llmTimes.push(llmTime);
+                updateSpeedBars(searchTime, llmTime);
+
+                // Enable "Tell Me More"
+                document.getElementById('tellMoreBtn').disabled = false;
+
+                // Update response info panel
+                updateResponseInfo({
+                    search_time_ms: searchTime,
+                    llm_time_ms: llmTime,
+                    turn_id: turnId,
+                    sources: sources,
+                    chunks_retrieved: sources.length
+                });
+
+            } catch (error) {
+                // Fallback to regular /chat endpoint
+                console.log('Streaming failed, falling back to /chat:', error);
+                await sendMessageFallback(message);
+            }
+        }
+
+        // Fallback non-streaming message (original implementation)
+        async function sendMessageFallback(message) {
+            const typingId = addTypingIndicator();
+
+            try {
+                const response = await fetch(`${API_URL}/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question: message })
+                });
+
+                const data = await response.json();
+                removeElement(typingId);
+
+                // Store for "tell me more"
+                lastTurnId = data.turn_id;
+                lastSources = data.sources || [];
+
+                // Update speed stats
+                searchTimes.push(data.search_time_ms);
+                llmTimes.push(data.llm_time_ms);
+                updateSpeedBars(data.search_time_ms, data.llm_time_ms);
+
+                // Add response with sources
+                addMessage('assistant', data.answer, {
+                    searchTime: data.search_time_ms,
+                    llmTime: data.llm_time_ms,
+                    sources: data.sources,
+                    turnId: data.turn_id,
+                    compressionRatio: data.compression_ratio
+                });
+
+                // Enable "Tell Me More"
+                document.getElementById('tellMoreBtn').disabled = false;
+
+                // Update response info panel
+                updateResponseInfo(data);
+
+            } catch (error) {
+                removeElement(typingId);
+                addMessage('assistant', '❌ Error: Could not connect to OceanEterna backend. Make sure the server is running on port 8888.');
+            }
+        }
+
+        // Tell Me More - uses cached sources, no re-search
+        async function tellMeMore() {
+            if (!lastTurnId) return;
+
+            const aspect = prompt('What aspect would you like to know more about?', 'the topic');
+            if (!aspect) return;
+
+            addMessage('user', `Tell me more about: ${aspect}`);
+            const typingId = addTypingIndicator();
+
+            try {
+                const response = await fetch(`${API_URL}/tell-me-more`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prev_turn_id: lastTurnId,
+                        aspect: aspect
+                    })
+                });
+
+                const data = await response.json();
+                removeElement(typingId);
+
+                if (data.success) {
+                    lastTurnId = data.turn_id;
+
+                    addMessage('assistant', data.answer, {
+                        searchTime: 0,
+                        llmTime: data.llm_time_ms,
+                        noSearch: true,
+                        sourcesReused: data.sources_reused
+                    });
+
+                    // Highlight the no-search benefit
+                    updateSpeedBars(0, data.llm_time_ms);
+                } else {
+                    addMessage('assistant', `⚠️ ${data.error}`);
+                }
+
+            } catch (error) {
+                removeElement(typingId);
+                addMessage('assistant', '❌ Error with "Tell Me More" request.');
+            }
+        }
+
+        // Add message to chat
+        function addMessage(role, content, meta = {}) {
+            const container = document.getElementById('messages');
+
+            // Remove empty state
+            const emptyState = container.querySelector('.empty-state');
+            if (emptyState) emptyState.remove();
+
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${role}`;
+            msgDiv.id = `msg-${Date.now()}`;
+
+            let metaHtml = '';
+            if (meta.searchTime !== undefined) {
+                if (meta.noSearch) {
+                    metaHtml = `
+                        <span class="speed-badge fast">⚡ No Search (cached)</span>
+                        <span class="speed-badge slow">LLM: ${Math.round(meta.llmTime)}ms</span>
+                    `;
+                } else {
+                    metaHtml = `
+                        <span class="speed-badge fast">Search: ${meta.searchTime.toFixed(1)}ms</span>
+                        <span class="speed-badge slow">LLM: ${Math.round(meta.llmTime)}ms</span>
+                    `;
+                }
+            }
+
+            let sourcesHtml = '';
+            if (meta.sources && meta.sources.length > 0) {
+                sourcesHtml = `
+                    <div class="message-sources">
+                        📎 Sources: ${meta.sources.map(s =>
+                            `<span class="source-chip" onclick="viewChunk('${s.chunk_id}')">${s.chunk_id}</span>`
+                        ).join('')}
+                    </div>
+                `;
+            } else if (meta.sourcesReused) {
+                sourcesHtml = `
+                    <div class="message-sources" style="color: var(--accent);">
+                        ♻️ Reused ${meta.sourcesReused} sources from previous turn (no re-search!)
+                    </div>
+                `;
+            }
+
+            msgDiv.innerHTML = `
+                <div class="message-avatar">${role === 'user' ? '👤' : '🤖'}</div>
+                <div class="message-content">
+                    <div class="message-text">${escapeHtml(content)}</div>
+                    ${sourcesHtml}
+                    <div class="message-meta">
+                        <span>${new Date().toLocaleTimeString()}</span>
+                        <div>${metaHtml}</div>
+                    </div>
+                </div>
+            `;
+
+            container.appendChild(msgDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // Add typing indicator
+        function addTypingIndicator() {
+            const container = document.getElementById('messages');
+            const id = `typing-${Date.now()}`;
+
+            const div = document.createElement('div');
+            div.className = 'message assistant';
+            div.id = id;
+            div.innerHTML = `
+                <div class="message-avatar">🤖</div>
+                <div class="message-content">
+                    <div class="typing-indicator">
+                        <div class="typing-dot"></div>
+                        <div class="typing-dot"></div>
+                        <div class="typing-dot"></div>
+                    </div>
+                </div>
+            `;
+
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+            return id;
+        }
+
+        // Remove element by ID
+        function removeElement(id) {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        }
+
+        // Update stats from server
+        async function updateStats() {
+            try {
+                const response = await fetch(`${API_URL}/stats`);
+                if (!response.ok) throw new Error('Not connected');
+
+                const data = await response.json();
+
+                // Connection status
+                document.getElementById('connectionStatus').textContent = 'Connected';
+
+                // Token count with animation
+                animateNumber('tokenCount', data.total_tokens);
+                animateNumber('chunkCount', data.chunks_loaded);
+
+                // System stats
+                document.getElementById('cpuValue').textContent = `${data.cpu_usage.toFixed(0)}%`;
+                document.getElementById('cpuBar').style.width = `${data.cpu_usage}%`;
+                document.getElementById('ramValue').textContent = `${data.ram_usage.toFixed(0)}%`;
+                document.getElementById('ramBar').style.width = `${data.ram_usage}%`;
+                document.getElementById('dbSize').textContent = `${data.db_size_mb} MB`;
+
+                // Average speeds
+                if (data.total_queries > 0) {
+                    document.getElementById('searchTimeLabel').textContent = `${data.avg_search_ms.toFixed(1)}ms`;
+                    document.getElementById('llmTimeLabel').textContent = `${Math.round(data.avg_llm_ms)}ms`;
+                }
+
+            } catch (error) {
+                document.getElementById('connectionStatus').textContent = 'Disconnected';
+            }
+        }
+
+        // Load chapter guide
+        async function loadChapterGuide() {
+            try {
+                const response = await fetch(`${API_URL}/guide`);
+                if (!response.ok) return;
+
+                const guide = await response.json();
+
+                if (guide.chunks && guide.chunks.by_type) {
+                    document.getElementById('docCount').textContent = guide.chunks.by_type.DOC || 0;
+                    document.getElementById('chatCount').textContent = guide.chunks.by_type.CHAT || 0;
+                    document.getElementById('codeCount').textContent = guide.chunks.by_type.CODE || 0;
+                    document.getElementById('fixCount').textContent = guide.chunks.by_type.FIX || 0;
+                    document.getElementById('featCount').textContent = guide.chunks.by_type.FEAT || 0;
+                }
+            } catch (error) {
+                console.log('Chapter guide not available');
+            }
+        }
+
+        // Update speed comparison bars
+        function updateSpeedBars(searchMs, llmMs) {
+            const maxTime = Math.max(llmMs, 5000); // Scale to max 5s or actual
+
+            const searchPercent = Math.max((searchMs / maxTime) * 100, 2);
+            const llmPercent = Math.max((llmMs / maxTime) * 100, 5);
+
+            document.getElementById('searchBar').style.width = `${searchPercent}%`;
+            document.getElementById('searchBarText').textContent = searchMs > 0 ? `${searchMs.toFixed(0)}ms` : '';
+            document.getElementById('searchTimeLabel').textContent = `${searchMs.toFixed(1)}ms`;
+
+            document.getElementById('llmBar').style.width = `${llmPercent}%`;
+            document.getElementById('llmBarText').textContent = `${Math.round(llmMs)}ms`;
+            document.getElementById('llmTimeLabel').textContent = `${Math.round(llmMs)}ms`;
+        }
+
+        // Update response info panel
+        function updateResponseInfo(data) {
+            document.getElementById('responseInfo').style.display = 'block';
+            document.getElementById('lastSearchTime').textContent = `${data.search_time_ms.toFixed(1)}ms`;
+            document.getElementById('lastLlmTime').textContent = `${Math.round(data.llm_time_ms)}ms`;
+            document.getElementById('lastSourceCount').textContent = data.sources ? data.sources.length : 0;
+            document.getElementById('lastTurnId').textContent = data.turn_id || '-';
+
+            if (data.compression_ratio) {
+                document.getElementById('compressionRatio').textContent = `${Math.round(data.compression_ratio)}:1`;
+            }
+        }
+
+        // Animate number change
+        function animateNumber(elementId, targetValue) {
+            const el = document.getElementById(elementId);
+            const currentValue = parseInt(el.textContent.replace(/,/g, '')) || 0;
+
+            if (currentValue === targetValue) return;
+
+            const duration = 500;
+            const steps = 20;
+            const increment = (targetValue - currentValue) / steps;
+            let current = currentValue;
+            let step = 0;
+
+            const timer = setInterval(() => {
+                step++;
+                current += increment;
+                el.textContent = Math.round(current).toLocaleString();
+
+                if (step >= steps) {
+                    clearInterval(timer);
+                    el.textContent = targetValue.toLocaleString();
+                }
+            }, duration / steps);
+        }
+
+        // View chunk content
+        async function viewChunk(chunkId) {
+            try {
+                const response = await fetch(`${API_URL}/chunk/${chunkId}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    alert(`Chunk: ${chunkId}\n\n${data.content.substring(0, 500)}${data.content.length > 500 ? '...' : ''}`);
+                } else {
+                    alert(`Could not load chunk: ${chunkId}`);
+                }
+            } catch (error) {
+                alert('Error loading chunk');
+            }
+        }
+
+        // File upload
+        async function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            addMessage('assistant', `📁 Processing file: ${file.name}...`);
+
+            try {
+                // Read file content
+                const content = await file.text();
+
+                const startTime = performance.now();
+
+                // Send to server
+                const response = await fetch(`${API_URL}/add-file`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        filename: file.name,
+                        content: content
+                    })
+                });
+
+                const result = await response.json();
+                const elapsed = performance.now() - startTime;
+
+                if (result.success) {
+                    addMessage('assistant',
+                        `✅ **File "${file.name}" indexed successfully!**\n\n` +
+                        `• Chunks added: **${result.chunks_added}**\n` +
+                        `• Tokens added: **~${result.tokens_added.toLocaleString()}**\n` +
+                        `• Total chunks: **${result.total_chunks.toLocaleString()}**\n` +
+                        `• Processing time: **${elapsed.toFixed(0)}ms**`
+                    );
+
+                    // Refresh stats
+                    await updateStats();
+                } else {
+                    addMessage('assistant', `❌ Error: ${result.error || 'Failed to add file'}`);
+                }
+            } catch (error) {
+                addMessage('assistant', `❌ Error uploading file: ${error.message}`);
+            }
+
+            event.target.value = '';
+        }
+
+        // File path upload (for large files - server reads directly)
+        async function handleFilePathUpload() {
+            const pathInput = document.getElementById('filePathInput');
+            const filepath = pathInput.value.trim();
+
+            if (!filepath) {
+                addMessage('assistant', '❌ Please enter a file path');
+                return;
+            }
+
+            addMessage('assistant', `📁 Adding file from path: ${filepath}...`);
+
+            try {
+                const startTime = performance.now();
+
+                const response = await fetch(`${API_URL}/add-file-path`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: filepath })
+                });
+
+                const result = await response.json();
+                const elapsed = performance.now() - startTime;
+
+                if (result.success) {
+                    addMessage('assistant',
+                        `✅ **File indexed successfully!**\n\n` +
+                        `• File: **${result.filename}**\n` +
+                        `• Chunks added: **${result.chunks_added}**\n` +
+                        `• Tokens added: **~${result.tokens_added.toLocaleString()}**\n` +
+                        `• Total chunks: **${result.total_chunks.toLocaleString()}**\n` +
+                        `• Processing time: **${elapsed.toFixed(0)}ms**`
+                    );
+                    pathInput.value = '';
+                    await updateStats();
+                } else {
+                    addMessage('assistant', `❌ Error: ${result.error || 'Failed to add file'}`);
+                }
+            } catch (error) {
+                addMessage('assistant', `❌ Error: ${error.message}`);
+            }
+        }
+
+        // Setup drag and drop
+        function setupDragDrop() {
+            const dropZone = document.getElementById('dropZone');
+
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('dragover');
+            });
+
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.classList.remove('dragover');
+            });
+
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    document.getElementById('fileInput').files = files;
+                    handleFileUpload({ target: { files: files } });
+                }
+            });
+        }
+
+        // Clear chat
+        function clearChat() {
+            document.getElementById('messages').innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">🌊</div>
+                    <h2>Welcome to OceanEterna</h2>
+                    <p>Ask questions about your indexed documents</p>
+                </div>
+            `;
+            lastTurnId = null;
+            document.getElementById('tellMoreBtn').disabled = true;
+            document.getElementById('responseInfo').style.display = 'none';
+        }
+
+        // Reset index
+        function resetIndex() {
+            if (confirm('⚠️ This will rebuild the index. Continue?')) {
+                addMessage('assistant', '🔄 Index reset requested. (Not yet implemented in demo)');
+            }
+        }
+
+        // Clear database
+        async function clearDatabase() {
+            if (!confirm('⚠️ This will permanently delete all conversation memory. Are you sure?')) return;
+
+            try {
+                const response = await fetch(`${API_URL}/clear-database`, { method: 'POST' });
+
+                if (response.ok) {
+                    addMessage('assistant', '✅ Database cleared! All conversation memory has been deleted.');
+                    loadChapterGuide();
+                } else {
+                    addMessage('assistant', '❌ Failed to clear database.');
+                }
+            } catch (error) {
+                addMessage('assistant', '❌ Error clearing database.');
+            }
+        }
+
+        // Escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

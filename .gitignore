@@ -1,0 +1,40 @@
+# Large data files (corpus, manifests, storage)
+*.bin
+*.jsonl
+*.jsonl.bak
+*.jsonl.orig
+*.bm25s
+guten_9m_build/
+test_data/
+
+# Compiled binaries
+ocean_chat_server_v4
+*.o
+*.out
+
+# Logs
+*.log
+/tmp/
+
+# Backups (keep structure but not duplicates of large files)
+chat_backup_step13/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Environment
+.env
+.env.local
