@@ -5,10 +5,16 @@
 *.jsonl.orig
 *.bm25s
 guten_9m_build/
+chat/corpus/*.bin
+chat/corpus/*.jsonl
+chat/corpus/*.json
+!chat/corpus/.gitkeep
 test_data/
 
 # Compiled binaries
 ocean_chat_server_v4
+ocean_chat_server_v42
+ocean_chat_server_fixed
 *.o
 *.out
 
@@ -16,8 +22,15 @@ ocean_chat_server_v4
 *.log
 /tmp/
 
-# Backups (keep structure but not duplicates of large files)
+# Backups
 chat_backup_step13/
+*.bak*
+
+# Claude Code memory files
+.memory/
+CLAUDE.md
+chat/.memory/
+chat/CLAUDE.md
 
 # Editor/IDE
 .vscode/

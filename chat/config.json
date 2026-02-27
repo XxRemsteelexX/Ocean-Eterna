@@ -28,9 +28,9 @@
     "candidate_count": 50
   },
   "corpus": {
-    "manifest": "guten_9m_build/manifest_guten9m.jsonl",
-    "storage": "guten_9m_build/storage/guten9m.bin",
-    "chapter_guide": "guten_9m_build/chapter_guide.json"
+    "manifest": "corpus/manifest.jsonl",
+    "storage": "corpus/storage.bin",
+    "chapter_guide": "corpus/chapter_guide.json"
   },
   "auth": {
     "enabled": false,
