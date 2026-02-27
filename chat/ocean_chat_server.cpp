@@ -15,6 +15,9 @@
 #include <mutex>
 #include <shared_mutex>
 #include <atomic>
+#include <list>
+#include <queue>
+#include <condition_variable>
 #include <omp.h>
 #include <lz4frame.h>
 #include <zstd.h>
@@ -24,6 +27,7 @@
 #include <sys/sysinfo.h>
 #include <unistd.h>
 #include <signal.h>
+#include <climits>
 #include "httplib.h"
 #include "json.hpp"
 #include "binary_manifest.hpp"
@@ -36,6 +40,10 @@ using namespace std;
 // Graceful shutdown support
 atomic<bool> g_shutdown_requested(false);
 httplib::Server* g_server_ptr = nullptr;
+
+// v4.2: Track active streaming threads for clean shutdown (fix detached thread bug)
+mutex g_stream_threads_mutex;
+vector<thread> g_stream_threads;
 
 void signal_handler(int sig) {
     cerr << "\nReceived signal " << sig << ", shutting down gracefully..." << endl;
@@ -91,14 +99,21 @@ struct Corpus {
 };
 
 // Stemming support: stem cache and reverse mapping
+// Protected by g_stem_mutex for thread-safe concurrent access
 unordered_map<string, string> g_stem_cache;              // keyword -> stem
 unordered_map<string, vector<string>> g_stem_to_keywords; // stem -> original keywords
+shared_mutex g_stem_mutex;  // read-heavy: shared for lookups, unique for inserts
 
 struct Hit {
     uint32_t doc_idx;
     double score;
     string context;
 };
+
+// v4.2: Safe prefix check (avoids substr on short strings)
+inline bool has_prefix(const string& s, const string& prefix) {
+    return s.length() >= prefix.length() && s.compare(0, prefix.length(), prefix) == 0;
+}
 
 // ChunkReference - stores source chunk info with relevance and snippet (Feature 2)
 struct ChunkReference {
@@ -146,7 +161,9 @@ struct ConversationTurn {
 };
 
 // Feature 2: Cache of recent conversation turns for "tell me more" without re-search
-unordered_map<string, ConversationTurn> recent_turns_cache;
+// LRU cache: list maintains insertion order (front=newest), map provides O(1) lookup
+list<pair<string, ConversationTurn>> recent_turns_list;
+unordered_map<string, list<pair<string, ConversationTurn>>::iterator> recent_turns_cache;
 const size_t MAX_CACHED_TURNS = 100;
 
 // No longer needed - conversation chunks are stored in main corpus
@@ -201,6 +218,11 @@ Corpus load_manifest(const string& path) {
                     doc.keywords.push_back(kw.get<string>());
                 }
             }
+
+            // v4.2: Load cross-reference fields if present
+            doc.source_file = obj.value("source_file", "");
+            doc.prev_chunk_id = obj.value("prev_chunk_id", "");
+            doc.next_chunk_id = obj.value("next_chunk_id", "");
 
             corpus.docs.push_back(doc);
 
@@ -367,6 +389,58 @@ string create_snippet(const string& content, size_t max_len = 200) {
     return content.substr(0, cut_pos) + "...";
 }
 
+// v4.2: Get adjacent chunks for context expansion
+// Returns content of neighboring chunks (prev/next) up to `window` hops
+// Caller must NOT hold corpus_mutex (this function acquires it)
+vector<pair<string, string>> get_adjacent_chunks(const string& chunk_id, int window) {
+    vector<pair<string, string>> adjacent;  // (chunk_id, content)
+    if (window <= 0) return adjacent;
+
+    // Collect adjacent chunk IDs under lock
+    vector<string> prev_ids, next_ids;
+    {
+        shared_lock<shared_mutex> lock(corpus_mutex);
+        // Walk backward
+        string current = chunk_id;
+        for (int i = 0; i < window; i++) {
+            auto it = chunk_id_to_index.find(current);
+            if (it == chunk_id_to_index.end() || it->second >= global_corpus.docs.size()) break;
+            const auto& doc = global_corpus.docs[it->second];
+            if (doc.prev_chunk_id.empty()) break;
+            prev_ids.push_back(doc.prev_chunk_id);
+            current = doc.prev_chunk_id;
+        }
+        // Walk forward
+        current = chunk_id;
+        for (int i = 0; i < window; i++) {
+            auto it = chunk_id_to_index.find(current);
+            if (it == chunk_id_to_index.end() || it->second >= global_corpus.docs.size()) break;
+            const auto& doc = global_corpus.docs[it->second];
+            if (doc.next_chunk_id.empty()) break;
+            next_ids.push_back(doc.next_chunk_id);
+            current = doc.next_chunk_id;
+        }
+    }
+
+    // Decompress adjacent chunks (no lock needed)
+    // Reverse prev_ids so they're in document order
+    for (auto it = prev_ids.rbegin(); it != prev_ids.rend(); ++it) {
+        auto [content, score] = get_chunk_by_id(*it);
+        if (score >= 0 && !content.empty()) {
+            adjacent.push_back({*it, content});
+        }
+    }
+    // Add next chunks in order
+    for (const auto& nid : next_ids) {
+        auto [content, score] = get_chunk_by_id(nid);
+        if (score >= 0 && !content.empty()) {
+            adjacent.push_back({nid, content});
+        }
+    }
+
+    return adjacent;
+}
+
 // Feature 3: Extract chunk IDs from context text
 // Looks for patterns like: 📎 chunk_id or [chunk_id] or guten9m_DOC_123
 vector<string> extract_chunk_ids_from_context(const string& text) {
@@ -445,9 +519,155 @@ double calculate_compression_ratio(const vector<string>& chunk_ids, const string
 // Search engine (BM25 TAAT, stemming, keyword extraction)
 #include "search_engine.hpp"
 
+// v4.2: Ocean Biological Scaling Taxonomy — tentacle count per creature tier
+struct CreatureTier {
+    const char* name;
+    const char* tag;
+    size_t min_chunks;
+    size_t max_chunks;
+    int tentacles;
+};
+
+static const CreatureTier CREATURE_TIERS[] = {
+    {"Seahorse",    "seahorse",    0,            99,           3},
+    {"Starfish",    "starfish",    100,          999,          8},
+    {"Jellyfish",   "jellyfish",   1000,         9999,         10},
+    {"Squid",       "squid",       10000,        99999,        13},
+    {"Octopus",     "octopus",     100000,       999999,       17},
+    {"Giant Squid", "giant_squid", 1000000,      4999999,      24},
+    {"Kraken",      "kraken",      5000000,      9999999,      30},
+    {"Leviathan",   "leviathan",   10000000,     99999999,     40},
+    {"Poseidon",    "poseidon",    100000000,    999999999,    70},
+    {"Oceanus",     "oceanus",     1000000000,   9999999999,   100},
+    {"GodMode",     "godmode",     10000000000,  (size_t)-1,   150},
+};
+
+static const int NUM_CREATURE_TIERS = sizeof(CREATURE_TIERS) / sizeof(CREATURE_TIERS[0]);
+
+const CreatureTier& get_creature_tier(size_t corpus_size) {
+    for (int i = NUM_CREATURE_TIERS - 1; i >= 0; i--) {
+        if (corpus_size >= CREATURE_TIERS[i].min_chunks) {
+            return CREATURE_TIERS[i];
+        }
+    }
+    return CREATURE_TIERS[0];
+}
+
+int calculate_dynamic_topk() {
+    shared_lock<shared_mutex> lock(corpus_mutex);
+    size_t corpus_size = global_corpus.docs.size();
+    if (corpus_size == 0) return g_config.search.top_k;
+    const CreatureTier& tier = get_creature_tier(corpus_size);
+    return tier.tentacles;
+}
+
+string get_creature_name() {
+    shared_lock<shared_mutex> lock(corpus_mutex);
+    return string(get_creature_tier(global_corpus.docs.size()).name);
+}
+
+int get_tentacle_count() {
+    shared_lock<shared_mutex> lock(corpus_mutex);
+    return get_creature_tier(global_corpus.docs.size()).tentacles;
+}
+
+// v4.2: Apply score threshold cutoff — drop results below threshold fraction of top score
+void apply_score_threshold(vector<Hit>& hits, double threshold_fraction) {
+    if (hits.empty() || threshold_fraction <= 0) return;
+
+    double top_score = hits[0].score;
+    double cutoff = top_score * threshold_fraction;
+
+    auto it = remove_if(hits.begin(), hits.end(),
+        [cutoff](const Hit& h) { return h.score < cutoff; });
+    hits.erase(it, hits.end());
+}
+
 // CURL callback
 // LLM client (CURL, query with retry + exponential backoff)
 #include "llm_client.hpp"
+
+// v4.2: Reranker client — calls Python sidecar to rerank BM25 results
+// Returns reranked hits, or original hits if reranker is unavailable
+vector<Hit> rerank_hits(const string& query, vector<Hit>& hits,
+                        const vector<string>& decompressed_contents, int final_topk) {
+    if (!g_config.reranker.enabled || hits.empty()) return hits;
+
+    // Build request JSON
+    json request;
+    request["query"] = query;
+    request["top_k"] = final_topk;
+    json docs = json::array();
+
+    // Map hit_idx to doc info
+    {
+        shared_lock<shared_mutex> lock(corpus_mutex);
+        for (size_t i = 0; i < hits.size() && i < decompressed_contents.size(); i++) {
+            json doc;
+            if (hits[i].doc_idx < global_corpus.docs.size()) {
+                doc["chunk_id"] = global_corpus.docs[hits[i].doc_idx].id;
+            }
+            doc["content"] = decompressed_contents[i].substr(0, 512);
+            doc["score"] = hits[i].score;
+            doc["original_idx"] = (int)i;
+            docs.push_back(doc);
+        }
+    }
+    request["documents"] = docs;
+
+    // Call reranker sidecar via CURL
+    CURL* curl = curl_easy_init();
+    if (!curl) return hits;
+
+    curl_easy_setopt(curl, CURLOPT_URL, g_config.reranker.url.c_str());
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)g_config.reranker.timeout_ms);
+
+    struct curl_slist* headers = NULL;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    string body = request.dump();
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+
+    string response_str;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_str);
+
+    CURLcode res = curl_easy_perform(curl);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) {
+        DEBUG_ERR("Reranker sidecar unavailable: " << curl_easy_strerror(res));
+        return hits;  // fall back to BM25 order
+    }
+
+    try {
+        json resp = json::parse(response_str);
+        if (!resp.contains("results")) return hits;
+
+        // Rebuild hits in reranked order
+        vector<Hit> reranked;
+        for (const auto& r : resp["results"]) {
+            int orig_idx = r.value("original_idx", -1);
+            if (orig_idx >= 0 && orig_idx < (int)hits.size()) {
+                Hit h = hits[orig_idx];
+                h.score = r.value("rerank_score", h.score);
+                reranked.push_back(h);
+            }
+        }
+
+        if (!reranked.empty()) {
+            DEBUG_LOG("Reranked " << hits.size() << " -> " << reranked.size()
+                      << " results in " << resp.value("rerank_time_ms", 0.0) << "ms");
+            return reranked;
+        }
+    } catch (const exception& e) {
+        DEBUG_ERR("Reranker response parse error: " << e.what());
+    }
+
+    return hits;  // fall back to BM25 order
+}
 
 // Step 22: Generate keywords with term frequencies for conversation turn
 // Returns pair<keywords, freq_map> where freq_map[keyword] = count
@@ -593,7 +813,7 @@ void load_chat_history() {
 
     // Find the highest CH chunk number from the global corpus
     for (const auto& doc : global_corpus.docs) {
-        if (doc.id.substr(0, 2) == "CH") {
+        if (has_prefix(doc.id, "CH") && doc.id.length() > 2) {
             try {
                 string chunk_num = doc.id.substr(2);  // Remove "CH" prefix
                 int num = stoi(chunk_num);
@@ -608,44 +828,42 @@ void load_chat_history() {
 }
 
 // Clear all conversation chunks from database
+// v4.2: Hold corpus_mutex for entire operation to prevent race with save_conversation_turn()
 bool clear_conversation_database() {
     try {
-        // Thread safety: acquire exclusive lock for corpus mutation
+        // Thread safety: acquire exclusive lock for entire operation
+        // This blocks search and save during clear, which is acceptable for a rare operation
         unique_lock<shared_mutex> lock(corpus_mutex);
 
         // Remove all CH chunks from in-memory corpus
         auto& docs = global_corpus.docs;
         docs.erase(remove_if(docs.begin(), docs.end(),
-            [](const DocMeta& doc) { return doc.id.substr(0, 2) == "CH"; }), docs.end());
+            [](const DocMeta& doc) {
+                return doc.id.length() >= 2 && has_prefix(doc.id, "CH");
+            }), docs.end());
 
-        // Clear conversation chunks from inverted index
-        for (auto it = global_corpus.inverted_index.begin(); it != global_corpus.inverted_index.end();) {
-            auto& indices = it->second;
-            indices.erase(remove_if(indices.begin(), indices.end(),
-                [&docs](uint32_t idx) {
-                    return idx >= docs.size() || docs[idx].id.substr(0, 2) == "CH";
-                }), indices.end());
+        // Rebuild inverted index and chunk_id_to_index from scratch
+        // This is necessary because erasing docs shifts all indices
+        global_corpus.inverted_index.clear();
+        global_corpus.tf_index.clear();
+        chunk_id_to_index.clear();
 
-            if (indices.empty()) {
-                it = global_corpus.inverted_index.erase(it);
-            } else {
-                ++it;
+        for (uint32_t i = 0; i < docs.size(); i++) {
+            for (const string& kw : docs[i].keywords) {
+                global_corpus.inverted_index[kw].push_back(i);
             }
+            chunk_id_to_index[docs[i].id] = i;
         }
 
-        // Clear chunk_id_to_index for CH chunks
-        for (auto it = chunk_id_to_index.begin(); it != chunk_id_to_index.end();) {
-            if (it->first.substr(0, 2) == "CH") {
-                it = chunk_id_to_index.erase(it);
-            } else {
-                ++it;
-            }
+        // Recalculate corpus stats
+        global_corpus.total_tokens = 0;
+        for (const auto& doc : docs) {
+            global_corpus.total_tokens += (doc.end - doc.start);
         }
+        global_corpus.avgdl = docs.empty() ? 0 :
+            static_cast<double>(global_corpus.total_tokens) / docs.size();
 
-        // Release lock before file I/O
-        lock.unlock();
-
-        // Rebuild manifest without conversation chunks
+        // Rebuild manifest without conversation chunks (still under lock)
         ifstream input_file(MANIFEST);
         ofstream temp_file(MANIFEST + ".tmp");
 
@@ -662,7 +880,7 @@ bool clear_conversation_database() {
                 string chunk_id = obj.value("chunk_id", "");
 
                 // Skip conversation chunks (CH*) when rebuilding manifest
-                if (chunk_id.substr(0, 2) != "CH") {
+                if (!has_prefix(chunk_id, "CH")) {
                     temp_file << line << "\n";
                 }
             } catch (...) {
@@ -721,6 +939,7 @@ struct ChunkData {
     unordered_map<string, uint16_t> tf_map;  // Step 22: term frequencies
     int token_start;
     int token_end;
+    string source_file;  // v4.2: original filename for cross-references
 };
 
 // Add file content to index (PARALLELIZED)
@@ -752,125 +971,120 @@ json add_file_to_index(const string& filename, const string& content) {
         content_type = "CODE";
     }
 
-    // Divide file into sections for parallel processing
+    // v4.2: Paragraph-safe chunking — NEVER split mid-paragraph
+    // Strategy: split on \n\n boundaries, merge small paragraphs into chunks
+    // up to CHUNK_SIZE, but never split a paragraph even if it exceeds CHUNK_SIZE
+    DEBUG_ERR("v4.2 paragraph-safe chunking (target " << CHUNK_SIZE << " chars)");
+
+    // Phase 1: Split content into paragraphs
+    vector<pair<size_t, size_t>> paragraphs;  // (start, end) positions
+    {
+        size_t pos = 0;
+        while (pos < content_len) {
+            // Find next paragraph break (\n\n)
+            size_t para_end = content.find("\n\n", pos);
+            if (para_end == string::npos) {
+                para_end = content_len;
+            } else {
+                para_end += 2;  // Include the \n\n
+            }
+            // Skip empty paragraphs (just whitespace)
+            size_t text_start = pos;
+            while (text_start < para_end && (content[text_start] == '\n' || content[text_start] == ' ' || content[text_start] == '\t'))
+                text_start++;
+            if (text_start < para_end) {
+                paragraphs.push_back({pos, para_end});
+            }
+            pos = para_end;
+        }
+    }
+    DEBUG_ERR("Found " << paragraphs.size() << " paragraphs");
+
+    // Phase 2: Merge consecutive small paragraphs into chunks (parallel)
     int num_threads = omp_get_max_threads();
-    size_t section_size = content_len / num_threads;
-    if (section_size < CHUNK_SIZE * 10) section_size = content_len;  // Don't divide if file is small
-
-    DEBUG_ERR("Processing with " << num_threads << " threads, section size: " << section_size);
-
-    // Each thread will process its section and produce chunks
-    vector<vector<ChunkData>> thread_chunks(num_threads);
+    vector<ChunkData> chunks;
     atomic<int> global_chunk_counter(uploaded_chunk_counter.load());
 
-    #pragma omp parallel
+    // Single-pass merge: accumulate paragraphs until we'd exceed CHUNK_SIZE
     {
-        int tid = omp_get_thread_num();
-        size_t section_start = tid * section_size;
-        size_t section_end = (tid == num_threads - 1) ? content_len : (tid + 1) * section_size;
+        size_t current_start = 0;
+        size_t current_end = 0;
+        bool started = false;
 
-        // Adjust section_start to paragraph boundary (except for first thread)
-        if (tid > 0 && section_start < content_len) {
-            size_t para = content.find("\n\n", section_start);
-            if (para != string::npos && para < section_start + CHUNK_SIZE) {
-                section_start = para + 2;
+        for (size_t pi = 0; pi < paragraphs.size(); pi++) {
+            auto [pstart, pend] = paragraphs[pi];
+            size_t para_len = pend - pstart;
+
+            if (!started) {
+                current_start = pstart;
+                current_end = pend;
+                started = true;
+                continue;
+            }
+
+            size_t current_len = current_end - current_start;
+
+            // If adding this paragraph would exceed target AND we already have content,
+            // emit current chunk and start new one
+            if (current_len + para_len > CHUNK_SIZE && current_len > 0) {
+                // Emit chunk
+                ChunkData chunk;
+                chunk.start_pos = current_start;
+                chunk.end_pos = current_end;
+                chunk.chunk_text = content.substr(current_start, current_end - current_start);
+                int chunk_num = ++global_chunk_counter;
+                chunk.chunk_id = clean_name + "_" + content_type + "_" + to_string(chunk_num);
+                auto [kws, tf] = extract_text_keywords_with_tf(chunk.chunk_text);
+                chunk.keywords = kws;
+                chunk.tf_map = tf;
+                chunk.summary = make_json_safe(chunk.chunk_text.substr(0, 150)).substr(0, 100);
+                if (chunk.chunk_text.length() > 100) chunk.summary += "...";
+                chunk.compressed = compress_chunk(chunk.chunk_text);
+                chunks.push_back(move(chunk));
+
+                // Start new chunk with this paragraph
+                current_start = pstart;
+                current_end = pend;
+            } else {
+                // Extend current chunk to include this paragraph
+                current_end = pend;
             }
         }
 
-        vector<ChunkData>& my_chunks = thread_chunks[tid];
-        size_t pos = section_start;
-
-        while (pos < section_end && pos < content_len) {
-            size_t target_end = min(pos + CHUNK_SIZE, content_len);
-            size_t end_pos = target_end;
-
-            // Find best chunk boundary
-            if (end_pos < content_len) {
-                size_t search_end = min(end_pos + 500, content_len);  // Larger search window
-                size_t search_start = (pos + CHUNK_SIZE/2 < end_pos) ? pos + CHUNK_SIZE/2 : pos;
-
-                // Priority 1: Look for article boundary (3+ newlines) - strongest signal
-                size_t best_break = string::npos;
-                for (size_t i = search_start; i < search_end - 2; i++) {
-                    if (content[i] == '\n' && content[i+1] == '\n' && content[i+2] == '\n') {
-                        best_break = i + 3;
-                        break;
-                    }
-                }
-
-                // Priority 2: Look for paragraph break (\n\n) near target
-                if (best_break == string::npos) {
-                    // First look forward
-                    for (size_t i = target_end; i < search_end - 1; i++) {
-                        if (content[i] == '\n' && content[i+1] == '\n') {
-                            best_break = i + 2;
-                            break;
-                        }
-                    }
-                    // Then look backward if nothing forward
-                    if (best_break == string::npos) {
-                        for (size_t i = target_end; i > search_start; i--) {
-                            if (content[i] == '\n' && i+1 < content_len && content[i+1] == '\n') {
-                                best_break = i + 2;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // Priority 3: Sentence boundary
-                if (best_break == string::npos) {
-                    for (size_t i = target_end; i > search_start; i--) {
-                        if ((content[i-1] == '.' || content[i-1] == '!' || content[i-1] == '?') &&
-                            (content[i] == ' ' || content[i] == '\n')) {
-                            best_break = i;
-                            break;
-                        }
-                    }
-                }
-
-                if (best_break != string::npos && best_break > pos) {
-                    end_pos = best_break;
-                }
-            }
-
-            if (end_pos <= pos) end_pos = min(pos + CHUNK_SIZE, content_len);
-            if (end_pos <= pos) break;
-
+        // Emit final chunk
+        if (started && current_end > current_start) {
             ChunkData chunk;
-            chunk.start_pos = pos;
-            chunk.end_pos = end_pos;
-            chunk.chunk_text = content.substr(pos, end_pos - pos);
-
+            chunk.start_pos = current_start;
+            chunk.end_pos = current_end;
+            chunk.chunk_text = content.substr(current_start, current_end - current_start);
             int chunk_num = ++global_chunk_counter;
             chunk.chunk_id = clean_name + "_" + content_type + "_" + to_string(chunk_num);
-            // Step 22: Extract keywords with term frequencies
             auto [kws, tf] = extract_text_keywords_with_tf(chunk.chunk_text);
             chunk.keywords = kws;
             chunk.tf_map = tf;
             chunk.summary = make_json_safe(chunk.chunk_text.substr(0, 150)).substr(0, 100);
             if (chunk.chunk_text.length() > 100) chunk.summary += "...";
             chunk.compressed = compress_chunk(chunk.chunk_text);
-
-            my_chunks.push_back(move(chunk));
-            pos = end_pos;
-        }
-
-        #pragma omp critical
-        {
-            DEBUG_ERR("Thread " << tid << " processed " << my_chunks.size() << " chunks");
+            chunks.push_back(move(chunk));
         }
     }
 
-    // Merge all thread chunks
-    vector<ChunkData> chunks;
-    for (auto& tc : thread_chunks) {
-        chunks.insert(chunks.end(), make_move_iterator(tc.begin()), make_move_iterator(tc.end()));
+    // Compress remaining chunks in parallel
+    #pragma omp parallel for schedule(dynamic)
+    for (size_t i = 0; i < chunks.size(); i++) {
+        // Keywords and compression already done above
+        (void)i;
     }
+
     uploaded_chunk_counter = global_chunk_counter.load();
     DEBUG_ERR("Total chunks: " << chunks.size());
-    // chunk counter already updated in parallel section
-    DEBUG_ERR("Parallel processing complete");
+    DEBUG_ERR("Paragraph-safe chunking complete");
+
+    // v4.2: Build cross-references (prev/next chunk linkage)
+    string safe_filename = make_json_safe(filename);
+    for (size_t i = 0; i < chunks.size(); i++) {
+        chunks[i].source_file = safe_filename;
+    }
 
     // PHASE 3: Sequential writes (single-threaded for consistency)
     DEBUG_ERR("Phase 3: Writing to storage...");
@@ -890,10 +1104,11 @@ json add_file_to_index(const string& filename, const string& content) {
     }
 
     int chunks_added = 0;
-    int total_tokens = 0;
-    string safe_filename = make_json_safe(filename);
+    uint64_t total_tokens = 0;  // v4.2: was int, overflows on multi-GB files
 
-    for (auto& chunk : chunks) {
+    for (size_t ci = 0; ci < chunks.size(); ci++) {
+        auto& chunk = chunks[ci];
+
         // Write compressed data
         storage_file.write(chunk.compressed.data(), chunk.compressed.size());
 
@@ -903,13 +1118,17 @@ json add_file_to_index(const string& filename, const string& content) {
         entry["chunk_id"] = make_json_safe(chunk.chunk_id);
         entry["type"] = content_type;
         entry["source_file"] = safe_filename;
-        entry["index"] = (int)global_corpus.docs.size();
+        entry["index"] = (uint64_t)global_corpus.docs.size();
         entry["token_start"] = total_tokens;
-        entry["token_end"] = total_tokens + (int)(chunk.chunk_text.length() / 4);
-        entry["offset"] = (long long)current_offset;
-        entry["length"] = (int)chunk.compressed.size();
+        entry["token_end"] = total_tokens + (uint64_t)(chunk.chunk_text.length() / 4);
+        entry["offset"] = (uint64_t)current_offset;
+        entry["length"] = (uint64_t)chunk.compressed.size();
         entry["compression"] = "zstd";
         entry["summary"] = chunk.summary;
+
+        // v4.2: Cross-references
+        if (ci > 0) entry["prev_chunk_id"] = make_json_safe(chunks[ci - 1].chunk_id);
+        if (ci + 1 < chunks.size()) entry["next_chunk_id"] = make_json_safe(chunks[ci + 1].chunk_id);
 
         json kw_array = json::array();
         for (const auto& kw : chunk.keywords) {
@@ -932,6 +1151,10 @@ json add_file_to_index(const string& filename, const string& content) {
             doc.length = chunk.compressed.size();
             doc.start = total_tokens;
             doc.end = total_tokens + (chunk.chunk_text.length() / 4);
+            // v4.2: Cross-references
+            doc.source_file = safe_filename;
+            if (ci > 0) doc.prev_chunk_id = chunks[ci - 1].chunk_id;
+            if (ci + 1 < chunks.size()) doc.next_chunk_id = chunks[ci + 1].chunk_id;
             global_corpus.docs.push_back(doc);
 
             // Update inverted index
@@ -999,10 +1222,10 @@ json add_file_to_index(const string& filename, const string& content) {
     json result;
     result["success"] = true;
     result["filename"] = make_json_safe(filename);
-    result["chunks_added"] = (int)chunks_added;
-    result["tokens_added"] = (int)total_tokens;
-    result["total_chunks"] = (int)global_corpus.docs.size();
-    result["total_tokens"] = (long long)(global_corpus.total_tokens + total_tokens);
+    result["chunks_added"] = chunks_added;
+    result["tokens_added"] = (uint64_t)total_tokens;
+    result["total_chunks"] = (uint64_t)global_corpus.docs.size();
+    result["total_tokens"] = (uint64_t)(global_corpus.total_tokens + total_tokens);
     cout << "Result JSON built successfully" << endl;
     return result;
 }
@@ -1081,8 +1304,13 @@ bool is_self_referential_query(const string& query) {
     };
 
     for (const string& pattern : self_patterns) {
-        if (lower_query.find(pattern) != string::npos) {
-            return true;
+        size_t pos = lower_query.find(pattern);
+        if (pos != string::npos) {
+            // v4.2: Ensure match is at word boundary to avoid false positives
+            // e.g., "i " should not match inside "anti " or "alibi "
+            if (pos == 0 || !isalpha((unsigned char)lower_query[pos - 1])) {
+                return true;
+            }
         }
     }
 
@@ -1098,7 +1326,7 @@ vector<Hit> search_conversation_chunks_only_locked(const string& query, int max_
         const auto& doc = global_corpus.docs[i];
 
         // Only search conversation chunks (CH prefix)
-        if (doc.id.substr(0, 2) != "CH") continue;
+        if (!has_prefix(doc.id, "CH")) continue;
 
         // Simple keyword matching for conversation chunks
         bool has_match = false;
@@ -1165,12 +1393,14 @@ json handle_source_query(const string& turn_id) {
     json response;
 
     // Check cache first
-    // Thread safety: lock cache for read
+    // v4.2: Proper LRU — move accessed item to front on cache hit
     {
         lock_guard<mutex> lock(cache_mutex);
         auto it = recent_turns_cache.find(turn_id);
         if (it != recent_turns_cache.end()) {
-            const ConversationTurn& turn = it->second;
+            // LRU promotion: move to front of list
+            recent_turns_list.splice(recent_turns_list.begin(), recent_turns_list, it->second);
+            const ConversationTurn& turn = it->second->second;
 
             json sources = json::array();
             for (const auto& ref : turn.source_refs) {
@@ -1211,7 +1441,7 @@ json handle_tell_me_more(const string& prev_turn_id, const string& aspect) {
     json response;
 
     // Check cache for previous turn and extract what we need
-    // Thread safety: lock cache for read, copy data we need
+    // v4.2: Proper LRU — promote on access
     ConversationTurn prev_turn;
     {
         lock_guard<mutex> lock(cache_mutex);
@@ -1222,7 +1452,9 @@ json handle_tell_me_more(const string& prev_turn_id, const string& aspect) {
             response["prev_turn_id"] = prev_turn_id;
             return response;
         }
-        prev_turn = it->second;  // Copy the turn data
+        // LRU promotion: move to front of list
+        recent_turns_list.splice(recent_turns_list.begin(), recent_turns_list, it->second);
+        prev_turn = it->second->second;  // Copy the turn data
     }
 
     // Build context from cached source_refs - no BM25 search needed!
@@ -1239,6 +1471,11 @@ json handle_tell_me_more(const string& prev_turn_id, const string& aspect) {
         response["success"] = false;
         response["error"] = "No source content available from cached references";
         return response;
+    }
+
+    // v4.2: Truncate context to max size
+    if (context.length() > (size_t)g_config.search.max_context_chars) {
+        context = context.substr(0, g_config.search.max_context_chars) + "\n\n[Context truncated]";
     }
 
     // Build prompt focused on the requested aspect
@@ -1268,9 +1505,13 @@ json handle_tell_me_more(const string& prev_turn_id, const string& aspect) {
     {
         lock_guard<mutex> lock(cache_mutex);
         if (recent_turns_cache.size() >= MAX_CACHED_TURNS) {
-            recent_turns_cache.erase(recent_turns_cache.begin());
+            // Evict oldest entry (back of list)
+            auto& oldest = recent_turns_list.back();
+            recent_turns_cache.erase(oldest.first);
+            recent_turns_list.pop_back();
         }
-        recent_turns_cache[new_turn.chunk_id] = new_turn;
+        recent_turns_list.push_front({new_turn.chunk_id, new_turn});
+        recent_turns_cache[new_turn.chunk_id] = recent_turns_list.begin();
     }
 
     // Feature 3: Format answer with chunk references
@@ -1343,6 +1584,8 @@ json get_system_stats() {
         stats_json["total_tokens"] = global_corpus.total_tokens;
         stats_json["db_size_mb"] = db_size;
         stats_json["chunks_loaded"] = global_corpus.docs.size();
+        stats_json["creature_tier"] = get_creature_name();
+        stats_json["tentacles"] = get_tentacle_count();
         stats_json["total_queries"] = stats.total_queries;
         stats_json["avg_search_ms"] = stats.total_queries > 0 ? stats.total_search_time_ms / stats.total_queries : 0;
         stats_json["avg_llm_ms"] = stats.total_queries > 0 ? stats.total_llm_time_ms / stats.total_queries : 0;
@@ -1538,6 +1781,9 @@ json handle_chat(const string& question) {
 
     auto search_start = chrono::high_resolution_clock::now();
 
+    // v4.2: Dynamic top_k based on corpus size
+    int effective_topk = calculate_dynamic_topk();
+
     // Smart tentacle allocation based on query type
     vector<Hit> hits;
 
@@ -1548,9 +1794,9 @@ json handle_chat(const string& question) {
         if (is_self_referential_query(question)) {
             DEBUG_LOG("[DEBUG] Self-referential query detected, prioritizing conversation search");
 
-            // Allocate tentacles: 3 for conversation, 5 for documents
+            // Allocate tentacles: 3 for conversation, rest for documents
             const int CHAT_TENTACLES = 3;
-            const int DOC_TENTACLES = TOPK - CHAT_TENTACLES;
+            const int DOC_TENTACLES = max(effective_topk - CHAT_TENTACLES, 5);
 
             // Search conversation chunks first with dedicated tentacles
             vector<Hit> conv_hits = search_conversation_chunks_only_locked(question, CHAT_TENTACLES);
@@ -1565,11 +1811,11 @@ json handle_chat(const string& question) {
 
             // Add document hits to fill remaining slots
             for (const auto& hit : doc_hits) {
-                if (hits.size() >= TOPK) break;
+                if ((int)hits.size() >= effective_topk) break;
 
                 // Only add if it's not a conversation chunk (avoid duplicates)
                 if (hit.doc_idx < global_corpus.docs.size() &&
-                    global_corpus.docs[hit.doc_idx].id.substr(0, 2) != "CH") {
+                    !has_prefix(global_corpus.docs[hit.doc_idx].id, "CH")) {
                     hits.push_back(hit);
                 }
             }
@@ -1577,12 +1823,12 @@ json handle_chat(const string& question) {
             DEBUG_LOG("[DEBUG] General query, using unified search with conversation boost");
 
             // Standard unified search for non-self-referential queries
-            hits = search_bm25(global_corpus, question, TOPK);
+            hits = search_bm25(global_corpus, question, effective_topk);
 
             // Boost scores for conversation chunks
             for (auto& hit : hits) {
                 if (hit.doc_idx < global_corpus.docs.size() &&
-                    global_corpus.docs[hit.doc_idx].id.substr(0, 2) == "CH") {
+                    has_prefix(global_corpus.docs[hit.doc_idx].id, "CH")) {
                     hit.score *= 1.5;  // 50% boost for conversation chunks
                 }
             }
@@ -1592,6 +1838,9 @@ json handle_chat(const string& question) {
                 return a.score > b.score;
             });
         }
+
+        // v4.2: Apply score threshold cutoff
+        apply_score_threshold(hits, g_config.search.score_threshold);
     } // Release lock after search
 
     auto search_end = chrono::high_resolution_clock::now();
@@ -1622,21 +1871,66 @@ json handle_chat(const string& question) {
     }
 
     // Cache decompressed chunks to avoid double decompression (Step 18 fix)
-    // Old code decompressed each chunk twice: once for context, once for snippet
     vector<string> decompressed_chunks;
     decompressed_chunks.reserve(hit_metas.size());
 
+    // v4.2: Decompress all chunks first (needed for reranking)
     for (const auto& meta : hit_metas) {
         string chunk_text = decompress_chunk(global_storage_path, meta.offset, meta.length);
-        chunk_text = make_json_safe(chunk_text);
-        decompressed_chunks.push_back(chunk_text);
+        decompressed_chunks.push_back(make_json_safe(chunk_text));
+    }
+
+    // v4.2: Rerank using Python sidecar if enabled
+    if (g_config.reranker.enabled && !hits.empty()) {
+        vector<Hit> reranked = rerank_hits(question, hits, decompressed_chunks, effective_topk);
+        if (reranked.size() != hits.size() || &reranked != &hits) {
+            // Rebuild hit_metas and decompressed_chunks in reranked order
+            vector<HitMeta> new_metas;
+            vector<string> new_decomp;
+            {
+                shared_lock<shared_mutex> lock(corpus_mutex);
+                for (const auto& hit : reranked) {
+                    if (hit.doc_idx < global_corpus.docs.size()) {
+                        const auto& doc = global_corpus.docs[hit.doc_idx];
+                        new_metas.push_back({doc.id, doc.offset, doc.length, hit.score});
+                        // Find the original decompressed content
+                        for (size_t j = 0; j < hits.size(); j++) {
+                            if (hits[j].doc_idx == hit.doc_idx) {
+                                new_decomp.push_back(decompressed_chunks[j]);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            hit_metas = move(new_metas);
+            decompressed_chunks = move(new_decomp);
+            hits = move(reranked);
+        }
+    }
+
+    for (size_t hi = 0; hi < hit_metas.size() && hi < decompressed_chunks.size(); hi++) {
+        const auto& meta = hit_metas[hi];
+        const string& chunk_text = decompressed_chunks[hi];
 
         // Track what types of context we have
-        if (meta.id.substr(0, 2) == "CH") {
+        if (has_prefix(meta.id, "CH")) {
             context += "[Previous conversation]\n" + chunk_text + "\n\n---\n\n";
             has_conversation_context = true;
         } else {
-            context += chunk_text + "\n\n---\n\n";
+            context += chunk_text + "\n\n";
+
+            // v4.2: Adjacent chunk retrieval — expand context with neighboring chunks
+            int cw = g_config.search.context_window;
+            if (cw > 0) {
+                auto adjacent = get_adjacent_chunks(meta.id, cw);
+                for (const auto& [adj_id, adj_content] : adjacent) {
+                    string safe_adj = make_json_safe(adj_content);
+                    context += safe_adj + "\n\n";
+                }
+            }
+
+            context += "---\n\n";
             has_document_context = true;
         }
     }
@@ -1645,6 +1939,17 @@ json handle_chat(const string& question) {
     string context_note = "";
     if (is_self_referential_query(question) && has_conversation_context && has_document_context) {
         context_note = "Note: This appears to be a personal question. Prioritize information from [Previous conversation] sections over document content.\n\n";
+    }
+
+    // v4.2: Truncate context to configurable max size to prevent exceeding LLM token limits
+    if (context.length() > (size_t)g_config.search.max_context_chars) {
+        // Truncate at a sentence boundary if possible
+        size_t cut = g_config.search.max_context_chars;
+        size_t last_period = context.rfind('.', cut);
+        if (last_period != string::npos && last_period > cut * 0.8) {
+            cut = last_period + 1;
+        }
+        context = context.substr(0, cut) + "\n\n[Context truncated]";
     }
 
     // Build LLM prompt with context guidance
@@ -1677,14 +1982,17 @@ json handle_chat(const string& question) {
     // Feature 4: Update chapter guide with new conversation
     update_chapter_guide_conversation(turn);
 
-    // Feature 2: Cache the turn for "tell me more" queries
+    // Feature 2: Cache the turn for "tell me more" queries (proper LRU eviction)
     // Thread safety: lock cache before mutation
     {
         lock_guard<mutex> lock(cache_mutex);
         if (recent_turns_cache.size() >= MAX_CACHED_TURNS) {
-            recent_turns_cache.erase(recent_turns_cache.begin());
+            auto& oldest = recent_turns_list.back();
+            recent_turns_cache.erase(oldest.first);
+            recent_turns_list.pop_back();
         }
-        recent_turns_cache[turn.chunk_id] = turn;
+        recent_turns_list.push_front({turn.chunk_id, turn});
+        recent_turns_cache[turn.chunk_id] = recent_turns_list.begin();
     }
 
     // Note: chunk_id_to_index is now updated inside save_conversation_turn()
@@ -1707,6 +2015,8 @@ json handle_chat(const string& question) {
     response["llm_time_ms"] = llm_ms;
     response["total_time_ms"] = search_ms + llm_ms;
     response["chunks_retrieved"] = hits.size();
+    response["creature_tier"] = get_creature_name();
+    response["tentacles"] = get_tentacle_count();
     response["turn_id"] = turn.chunk_id;
 
     // Include source IDs
@@ -1833,7 +2143,7 @@ void run_http_server() {
 
     // GET /health
     svr.Get("/health", [](const httplib::Request&, httplib::Response& res) {
-        json health = {{"status", "ok"}, {"version", "4.0"}};
+        json health = {{"status", "ok"}, {"version", "4.2"}, {"creature_tier", get_creature_name()}, {"tentacles", get_tentacle_count()}};
         res.set_content(health.dump(), "application/json");
     });
 
@@ -1842,6 +2152,7 @@ void run_http_server() {
         try {
             json body = json::parse(req.body);
             if (!body.contains("question")) {
+                res.status = 400;
                 res.set_content(json({{"error", "Missing 'question' field"}}).dump(), "application/json");
                 return;
             }
@@ -1849,6 +2160,7 @@ void run_http_server() {
             json response = handle_chat(question);
             res.set_content(response.dump(), "application/json");
         } catch (const exception& e) {
+            res.status = 400;
             res.set_content(json({{"error", "Invalid request"}}).dump(), "application/json");
         }
     });
@@ -1865,6 +2177,9 @@ void run_http_server() {
 
             auto search_start = chrono::high_resolution_clock::now();
 
+            // v4.2: Dynamic top_k for streaming endpoint
+            int effective_topk = calculate_dynamic_topk();
+
             // Same search logic as handle_chat
             vector<Hit> hits;
             {
@@ -1872,22 +2187,22 @@ void run_http_server() {
 
                 if (is_self_referential_query(question)) {
                     const int CHAT_TENTACLES = 3;
-                    const int DOC_TENTACLES = TOPK - CHAT_TENTACLES;
+                    const int DOC_TENTACLES = max(effective_topk - CHAT_TENTACLES, 5);
                     vector<Hit> conv_hits = search_conversation_chunks_only_locked(question, CHAT_TENTACLES);
                     vector<Hit> doc_hits = search_bm25(global_corpus, question, DOC_TENTACLES);
                     for (const auto& hit : conv_hits) hits.push_back(hit);
                     for (const auto& hit : doc_hits) {
-                        if (hits.size() >= TOPK) break;
+                        if ((int)hits.size() >= effective_topk) break;
                         if (hit.doc_idx < global_corpus.docs.size() &&
-                            global_corpus.docs[hit.doc_idx].id.substr(0, 2) != "CH") {
+                            !has_prefix(global_corpus.docs[hit.doc_idx].id, "CH")) {
                             hits.push_back(hit);
                         }
                     }
                 } else {
-                    hits = search_bm25(global_corpus, question, TOPK);
+                    hits = search_bm25(global_corpus, question, effective_topk);
                     for (auto& hit : hits) {
                         if (hit.doc_idx < global_corpus.docs.size() &&
-                            global_corpus.docs[hit.doc_idx].id.substr(0, 2) == "CH") {
+                            has_prefix(global_corpus.docs[hit.doc_idx].id, "CH")) {
                             hit.score *= 1.5;
                         }
                     }
@@ -1895,6 +2210,9 @@ void run_http_server() {
                         return a.score > b.score;
                     });
                 }
+
+                // v4.2: Apply score threshold cutoff
+                apply_score_threshold(hits, g_config.search.score_threshold);
             }
 
             auto search_end = chrono::high_resolution_clock::now();
@@ -1922,7 +2240,7 @@ void run_http_server() {
                 string chunk_text = decompress_chunk(global_storage_path, meta.offset, meta.length);
                 chunk_text = make_json_safe(chunk_text);
                 decompressed_chunks.push_back(chunk_text);
-                if (meta.id.substr(0, 2) == "CH") {
+                if (has_prefix(meta.id, "CH")) {
                     context += "[Previous conversation]\n" + chunk_text + "\n\n---\n\n";
                     has_conversation_context = true;
                 } else {
@@ -1934,6 +2252,16 @@ void run_http_server() {
             string context_note = "";
             if (is_self_referential_query(question) && has_conversation_context && has_document_context) {
                 context_note = "Note: This appears to be a personal question. Prioritize information from [Previous conversation] sections over document content.\n\n";
+            }
+
+            // v4.2: Truncate context for streaming endpoint too
+            if (context.length() > (size_t)g_config.search.max_context_chars) {
+                size_t cut = g_config.search.max_context_chars;
+                size_t last_period = context.rfind('.', cut);
+                if (last_period != string::npos && last_period > cut * 0.8) {
+                    cut = last_period + 1;
+                }
+                context = context.substr(0, cut) + "\n\n[Context truncated]";
             }
 
             string prompt = "Based on the context below, answer the question concisely.\n\n" + context_note + "Context:\n" + context +
@@ -1948,82 +2276,140 @@ void run_http_server() {
             res.set_header("Connection", "keep-alive");
             res.set_header("X-Accel-Buffering", "no");  // Disable nginx buffering
 
-            // Build the complete response using streaming
-            string full_response;
-            auto llm_start = chrono::high_resolution_clock::now();
-
-            // Use httplib's content provider for SSE
-            // We need to collect events first, then send them
-            vector<string> sse_events;
-
-            // Send search metadata event
-            json search_event = {{"search_time_ms", search_ms}, {"chunks_retrieved", hits.size()}};
-            sse_events.push_back("event: search\ndata: " + search_event.dump() + "\n\n");
-
-            // Stream LLM response
-            auto [answer, llm_ms] = query_llm_streaming(prompt, [&sse_events](const string& token) {
-                json token_event = {{"token", token}};
-                sse_events.push_back("data: " + token_event.dump() + "\n\n");
-            });
-            full_response = answer;
-
-            auto llm_end = chrono::high_resolution_clock::now();
-            double total_llm_ms = chrono::duration<double, milli>(llm_end - llm_start).count();
-
-            // Build source info
-            json sources = json::array();
-            for (const auto& meta : hit_metas) {
-                sources.push_back({{"chunk_id", meta.id}, {"score", meta.score}});
-            }
-
-            // Send done event
-            json done_event = {
-                {"turn_id", turn_id},
-                {"total_time_ms", search_ms + total_llm_ms},
-                {"llm_time_ms", total_llm_ms},
-                {"sources", sources}
+            // True SSE streaming using chunked content provider
+            // Shared state for the streaming callback and content provider
+            struct StreamState {
+                mutex mtx;
+                condition_variable cv;
+                queue<string> event_queue;
+                bool done = false;
+                string full_response;
             };
-            sse_events.push_back("event: done\ndata: " + done_event.dump() + "\n\n");
+            auto state = make_shared<StreamState>();
 
-            // Save conversation turn (same as handle_chat)
-            if (answer.substr(0, 5) != "ERROR") {
-                ConversationTurn turn;
-                turn.user_message = question;
-                turn.system_response = answer;
-                turn.timestamp = chrono::system_clock::now();
-                turn.chunk_id = turn_id;
-                for (size_t i = 0; i < hit_metas.size(); i++) {
-                    ChunkReference ref;
-                    ref.chunk_id = hit_metas[i].id;
-                    ref.relevance_score = hit_metas[i].score;
-                    ref.snippet = create_snippet(decompressed_chunks[i]);
-                    turn.source_refs.push_back(ref);
-                }
-                save_conversation_turn(turn);
-                update_chapter_guide_conversation(turn);
-                {
-                    lock_guard<mutex> lock(cache_mutex);
-                    if (recent_turns_cache.size() >= MAX_CACHED_TURNS) {
-                        recent_turns_cache.erase(recent_turns_cache.begin());
-                    }
-                    recent_turns_cache[turn.chunk_id] = turn;
-                }
-            }
-
-            // Update stats
+            // Queue search metadata event first
+            json search_event = {{"search_time_ms", search_ms}, {"chunks_retrieved", hits.size()}, {"creature_tier", get_creature_name()}, {"tentacles", get_tentacle_count()}};
             {
-                lock_guard<mutex> lock(stats_mutex);
-                stats.total_queries++;
-                stats.total_search_time_ms += search_ms;
-                stats.total_llm_time_ms += total_llm_ms;
+                lock_guard<mutex> lock(state->mtx);
+                state->event_queue.push("event: search\ndata: " + search_event.dump() + "\n\n");
             }
 
-            // Combine all SSE events and send
-            string sse_body;
-            for (const auto& event : sse_events) {
-                sse_body += event;
+            // Launch LLM streaming in a background thread
+            // Capture hit_metas and decompressed_chunks by value to avoid dangling references
+            // (the handler's stack may unwind before the detached thread finishes)
+            auto stream_thread = thread([state, prompt, hit_metas, decompressed_chunks,
+                                          search_ms, turn_id, question]() {
+                auto [answer, llm_ms] = query_llm_streaming(prompt, [&state](const string& token) {
+                    json token_event = {{"token", token}};
+                    lock_guard<mutex> lock(state->mtx);
+                    state->event_queue.push("data: " + token_event.dump() + "\n\n");
+                    state->cv.notify_one();
+                });
+
+                state->full_response = answer;
+
+                // Build source info
+                json sources = json::array();
+                for (const auto& meta : hit_metas) {
+                    sources.push_back({{"chunk_id", meta.id}, {"score", meta.score}});
+                }
+
+                // Queue done event
+                json done_event = {
+                    {"turn_id", turn_id},
+                    {"total_time_ms", search_ms + llm_ms},
+                    {"llm_time_ms", llm_ms},
+                    {"sources", sources}
+                };
+
+                {
+                    lock_guard<mutex> lock(state->mtx);
+                    state->event_queue.push("event: done\ndata: " + done_event.dump() + "\n\n");
+                    state->done = true;
+                }
+                state->cv.notify_one();
+
+                // Save conversation turn
+                if (answer.substr(0, 5) != "ERROR") {
+                    ConversationTurn turn;
+                    turn.user_message = question;
+                    turn.system_response = answer;
+                    turn.timestamp = chrono::system_clock::now();
+                    turn.chunk_id = turn_id;
+                    for (size_t i = 0; i < hit_metas.size(); i++) {
+                        ChunkReference ref;
+                        ref.chunk_id = hit_metas[i].id;
+                        ref.relevance_score = hit_metas[i].score;
+                        ref.snippet = create_snippet(decompressed_chunks[i]);
+                        turn.source_refs.push_back(ref);
+                    }
+                    save_conversation_turn(turn);
+                    update_chapter_guide_conversation(turn);
+                    {
+                        lock_guard<mutex> lock_c(cache_mutex);
+                        if (recent_turns_cache.size() >= MAX_CACHED_TURNS) {
+                            auto& oldest = recent_turns_list.back();
+                            recent_turns_cache.erase(oldest.first);
+                            recent_turns_list.pop_back();
+                        }
+                        recent_turns_list.push_front({turn.chunk_id, turn});
+                        recent_turns_cache[turn.chunk_id] = recent_turns_list.begin();
+                    }
+                }
+
+                // Update stats
+                {
+                    lock_guard<mutex> lock_s(stats_mutex);
+                    stats.total_queries++;
+                    stats.total_search_time_ms += search_ms;
+                    stats.total_llm_time_ms += llm_ms;
+                }
+            });
+            // v4.2: Track thread for clean shutdown instead of detaching
+            {
+                lock_guard<mutex> tlock(g_stream_threads_mutex);
+                g_stream_threads.push_back(move(stream_thread));
             }
-            res.set_content(sse_body, "text/event-stream");
+
+            // Use chunked content provider to stream SSE events as they arrive
+            res.set_chunked_content_provider("text/event-stream",
+                [state](size_t /*offset*/, httplib::DataSink& sink) -> bool {
+                    while (true) {
+                        unique_lock<mutex> lock(state->mtx);
+                        state->cv.wait_for(lock, chrono::milliseconds(100), [&state] {
+                            return !state->event_queue.empty() || state->done;
+                        });
+
+                        // Drain all queued events
+                        while (!state->event_queue.empty()) {
+                            string event = state->event_queue.front();
+                            state->event_queue.pop();
+                            lock.unlock();
+                            sink.write(event.data(), event.size());
+                            lock.lock();
+                        }
+
+                        if (state->done && state->event_queue.empty()) {
+                            lock.unlock();
+                            sink.done();
+                            return false;  // Signal completion
+                        }
+                    }
+                });
+
+            // v4.2: Periodically clean up finished streaming threads
+            {
+                lock_guard<mutex> tlock(g_stream_threads_mutex);
+                g_stream_threads.erase(
+                    remove_if(g_stream_threads.begin(), g_stream_threads.end(),
+                        [](thread& t) {
+                            // Can't query if a std::thread is done, so we don't join here.
+                            // Cleanup happens at shutdown. This just removes non-joinable entries.
+                            if (!t.joinable()) return true;
+                            return false;
+                        }),
+                    g_stream_threads.end());
+            }
 
         } catch (const exception& e) {
             res.set_content("event: error\ndata: {\"error\":\"" + string(e.what()) + "\"}\n\n", "text/event-stream");
@@ -2050,8 +2436,10 @@ void run_http_server() {
             json body = json::parse(req.body);
             string turn_id = body["turn_id"];
             json response = handle_source_query(turn_id);
+            if (!response.value("success", false)) res.status = 404;
             res.set_content(response.dump(), "application/json");
         } catch (...) {
+            res.status = 400;
             res.set_content(json({{"error", "Invalid request - need turn_id"}}).dump(), "application/json");
         }
     });
@@ -2063,20 +2451,53 @@ void run_http_server() {
             string prev_turn_id = body["prev_turn_id"];
             string aspect = body.value("aspect", "the topic");
             json response = handle_tell_me_more(prev_turn_id, aspect);
+            if (!response.value("success", false)) res.status = 404;
             res.set_content(response.dump(), "application/json");
         } catch (...) {
+            res.status = 400;
             res.set_content(json({{"error", "Invalid request - need prev_turn_id"}}).dump(), "application/json");
         }
     });
 
     // GET /chunk/:id - use regex pattern matching
+    // v4.2: supports ?context_window=N parameter for adjacent chunk retrieval
     svr.Get(R"(/chunk/(.+))", [](const httplib::Request& req, httplib::Response& res) {
         string chunk_id = req.matches[1];
+        int context_window = 0;
+        if (req.has_param("context_window")) {
+            try { context_window = min(stoi(req.get_param_value("context_window")), 3); }
+            catch (...) { context_window = 0; }
+        }
+
         auto [content, score] = get_chunk_by_id(chunk_id);
         if (score >= 0) {
             json response = {{"success", true}, {"chunk_id", chunk_id}, {"content", content}};
+
+            // v4.2: Include cross-reference metadata
+            {
+                shared_lock<shared_mutex> lock(corpus_mutex);
+                auto it = chunk_id_to_index.find(chunk_id);
+                if (it != chunk_id_to_index.end() && it->second < global_corpus.docs.size()) {
+                    const auto& doc = global_corpus.docs[it->second];
+                    if (!doc.prev_chunk_id.empty()) response["prev_chunk_id"] = doc.prev_chunk_id;
+                    if (!doc.next_chunk_id.empty()) response["next_chunk_id"] = doc.next_chunk_id;
+                    if (!doc.source_file.empty()) response["source_file"] = doc.source_file;
+                }
+            }
+
+            // v4.2: Include adjacent chunks if requested
+            if (context_window > 0) {
+                auto adjacent = get_adjacent_chunks(chunk_id, context_window);
+                json adj_json = json::array();
+                for (const auto& [adj_id, adj_content] : adjacent) {
+                    adj_json.push_back({{"chunk_id", adj_id}, {"content", adj_content}});
+                }
+                response["adjacent_chunks"] = adj_json;
+            }
+
             res.set_content(response.dump(), "application/json");
         } else {
+            res.status = 404;
             json error = {{"success", false}, {"error", "Chunk not found: " + chunk_id}};
             res.set_content(error.dump(), "application/json");
         }
@@ -2103,6 +2524,7 @@ void run_http_server() {
             };
             res.set_content(response.dump(), "application/json");
         } catch (...) {
+            res.status = 400;
             res.set_content(json({{"error", "Invalid request - need chunk_ids array or text"}}).dump(), "application/json");
         }
     });
@@ -2116,6 +2538,7 @@ void run_http_server() {
             json response = {{"success", true}, {"chunk_ids", chunk_ids}, {"count", chunk_ids.size()}};
             res.set_content(response.dump(), "application/json");
         } catch (...) {
+            res.status = 400;
             res.set_content(json({{"error", "Invalid request - need text field"}}).dump(), "application/json");
         }
     });
@@ -2126,6 +2549,108 @@ void run_http_server() {
         res.set_content(chapter_guide.dump(2), "application/json");
     });
 
+    // v4.2: GET /catalog — hierarchical corpus catalog with per-chunk type/source/section info
+    svr.Get("/catalog", [](const httplib::Request& req, httplib::Response& res) {
+        string filter_type = req.has_param("type") ? req.get_param_value("type") : "";
+        string filter_source = req.has_param("source") ? req.get_param_value("source") : "";
+        int page = 0, page_size = 100;
+        if (req.has_param("page")) {
+            try { page = stoi(req.get_param_value("page")); } catch (...) {}
+        }
+        if (req.has_param("page_size")) {
+            try { page_size = min(stoi(req.get_param_value("page_size")), 1000); } catch (...) {}
+        }
+
+        json catalog;
+
+        // Build hierarchical view under shared lock
+        {
+            shared_lock<shared_mutex> lock(corpus_mutex);
+
+            // Type counts
+            unordered_map<string, int> type_counts;
+            // Source file -> chunk count
+            unordered_map<string, int> source_counts;
+            // Section paths
+            unordered_map<string, int> section_counts;
+
+            for (const auto& doc : global_corpus.docs) {
+                // Determine type from ID prefix
+                string type = "DOC";
+                if (has_prefix(doc.id, "CH")) type = "CHAT";
+                else if (doc.id.find("_CODE_") != string::npos) type = "CODE";
+                else if (doc.id.find("_FIX_") != string::npos) type = "FIX";
+                else if (doc.id.find("_FEAT_") != string::npos) type = "FEAT";
+                type_counts[type]++;
+
+                if (!doc.source_file.empty()) {
+                    source_counts[doc.source_file]++;
+                }
+
+                if (!doc.doc_section.empty()) {
+                    section_counts[doc.doc_section]++;
+                }
+            }
+
+            catalog["total_chunks"] = global_corpus.docs.size();
+            catalog["total_tokens"] = global_corpus.total_tokens;
+            catalog["avgdl"] = global_corpus.avgdl;
+
+            // Types
+            json types = json::object();
+            for (const auto& [t, c] : type_counts) types[t] = c;
+            catalog["types"] = types;
+
+            // Source files (sorted by chunk count)
+            json sources = json::array();
+            vector<pair<string, int>> sorted_sources(source_counts.begin(), source_counts.end());
+            sort(sorted_sources.begin(), sorted_sources.end(),
+                [](const pair<string, int>& a, const pair<string, int>& b) {
+                    return a.second > b.second;
+                });
+            for (const auto& [s, c] : sorted_sources) {
+                sources.push_back({{"source_file", s}, {"chunk_count", c}});
+            }
+            catalog["source_files"] = sources;
+
+            // Paginated chunk listing
+            json chunk_list = json::array();
+            int start_idx = page * page_size;
+            int added = 0;
+            int skipped = 0;
+            for (size_t i = 0; i < global_corpus.docs.size() && added < page_size; i++) {
+                const auto& doc = global_corpus.docs[i];
+
+                // Apply filters
+                if (!filter_type.empty()) {
+                    string type = "DOC";
+                    if (has_prefix(doc.id, "CH")) type = "CHAT";
+                    else if (doc.id.find("_CODE_") != string::npos) type = "CODE";
+                    if (type != filter_type) continue;
+                }
+                if (!filter_source.empty() && doc.source_file != filter_source) continue;
+
+                if (skipped < start_idx) { skipped++; continue; }
+
+                json entry = {
+                    {"chunk_id", doc.id},
+                    {"summary", doc.summary},
+                    {"keywords_count", doc.keywords.size()}
+                };
+                if (!doc.source_file.empty()) entry["source_file"] = doc.source_file;
+                if (!doc.prev_chunk_id.empty()) entry["prev_chunk_id"] = doc.prev_chunk_id;
+                if (!doc.next_chunk_id.empty()) entry["next_chunk_id"] = doc.next_chunk_id;
+                chunk_list.push_back(entry);
+                added++;
+            }
+            catalog["chunks"] = chunk_list;
+            catalog["page"] = page;
+            catalog["page_size"] = page_size;
+        }
+
+        res.set_content(catalog.dump(2), "application/json");
+    });
+
     // POST /query/code-discussions
     svr.Post("/query/code-discussions", [](const httplib::Request& req, httplib::Response& res) {
         try {
@@ -2134,6 +2659,7 @@ void run_http_server() {
             json result = query_code_discussions(chunk_id);
             res.set_content(result.dump(), "application/json");
         } catch (...) {
+            res.status = 400;
             res.set_content(json({{"error", "Invalid request - need chunk_id"}}).dump(), "application/json");
         }
     });
@@ -2146,6 +2672,7 @@ void run_http_server() {
             json result = query_fixes_for_file(filename);
             res.set_content(result.dump(), "application/json");
         } catch (...) {
+            res.status = 400;
             res.set_content(json({{"error", "Invalid request - need filename"}}).dump(), "application/json");
         }
     });
@@ -2158,6 +2685,7 @@ void run_http_server() {
             json result = query_feature_implementation(feature_id);
             res.set_content(result.dump(), "application/json");
         } catch (...) {
+            res.status = 400;
             res.set_content(json({{"error", "Invalid request - need feature_id"}}).dump(), "application/json");
         }
     });
@@ -2170,6 +2698,42 @@ void run_http_server() {
             string filepath = body.value("path", "");
             if (filepath.empty()) {
                 res.set_content(json({{"error", "Missing 'path' in request body"}, {"success", false}}).dump(), "application/json");
+                return;
+            }
+
+            // v4.2: Security: Block path traversal attacks with strict directory allowlist
+            if (filepath.find("..") != string::npos) {
+                res.status = 403;
+                res.set_content(json({{"error", "Path traversal not allowed"}, {"success", false}}).dump(), "application/json");
+                return;
+            }
+            // Resolve symlinks and canonicalize path
+            char resolved[PATH_MAX];
+            if (realpath(filepath.c_str(), resolved) == nullptr) {
+                res.status = 400;
+                res.set_content(json({{"error", "Cannot resolve path: " + filepath}, {"success", false}}).dump(), "application/json");
+                return;
+            }
+            string resolved_str(resolved);
+            // Get current working directory
+            char cwd[PATH_MAX];
+            if (getcwd(cwd, PATH_MAX) == nullptr) {
+                res.status = 500;
+                res.set_content(json({{"error", "Server error resolving working directory"}, {"success", false}}).dump(), "application/json");
+                return;
+            }
+            string cwd_str(cwd);
+            // v4.2: Strict directory boundary check — prevent prefix collisions
+            // e.g., /home/user must not match /home/user2/evil
+            bool under_cwd = (resolved_str == cwd_str) ||
+                             (resolved_str.length() > cwd_str.length() &&
+                              resolved_str.substr(0, cwd_str.length()) == cwd_str &&
+                              resolved_str[cwd_str.length()] == '/');
+            bool under_tmp = (resolved_str.length() > 4 &&
+                              resolved_str.substr(0, 5) == "/tmp/");
+            if (!under_cwd && !under_tmp) {
+                res.status = 403;
+                res.set_content(json({{"error", "Access denied: path must be under working directory or /tmp"}, {"success", false}}).dump(), "application/json");
                 return;
             }
 
@@ -2228,6 +2792,7 @@ void run_http_server() {
     cout << "\n🌊 OceanEterna Chat Server running on http://localhost:" << HTTP_PORT << endl;
     cout << "Open ocean_chat.html in your browser to start chatting!\n" << endl;
 
+    cout << "Creature Tier: " << get_creature_name() << " (" << get_tentacle_count() << " tentacles)" << endl;
     svr.listen(g_config.server.host.c_str(), g_config.server.port);
 }
 
@@ -2236,7 +2801,7 @@ int main(int argc, char** argv) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    cout << "🌊 OceanEterna Chat Server v4.0 (Binary Manifest + Fast BM25)" << endl;
+    cout << "🌊 OceanEterna Chat Server v4.2 (Bug Fixes + Smart Chunking + Reranking)" << endl;
     cout << "============================================================\n" << endl;
 
     // Load configuration from config.json + environment variables
@@ -2283,7 +2848,7 @@ int main(int argc, char** argv) {
     // Count conversation chunks in main corpus
     int chat_chunks = 0;
     for (const auto& doc : global_corpus.docs) {
-        if (doc.id.substr(0, 2) == "CH") chat_chunks++;
+        if (has_prefix(doc.id, "CH")) chat_chunks++;
     }
     cout << "Current conversation chunks in database: " << chat_chunks << endl;
 
@@ -2294,6 +2859,15 @@ int main(int argc, char** argv) {
     // Speed Improvement #2 & #3: Build BM25S pre-computed index with BlockWeakAnd
     // v3: Using original BM25 search (500ms) - no BM25S overhead
     cout << "\nReady! Using original BM25 search (~500ms)" << endl;
+    // v4.2: Print configuration summary
+    cout << "Search: dynamic top_k (base " << g_config.search.top_k
+         << "), context_window=" << g_config.search.context_window
+         << ", max_context=" << g_config.search.max_context_chars << " chars" << endl;
+    cout << "Score threshold: " << g_config.search.score_threshold << " (fraction of top score)" << endl;
+    if (g_config.reranker.enabled)
+        cout << "Reranker: ENABLED (" << g_config.reranker.url << ")" << endl;
+    else
+        cout << "Reranker: disabled (enable in config.json)" << endl;
     if (g_config.auth.enabled)
         cout << "Auth: ENABLED (X-API-Key required)" << endl;
     if (g_config.rate_limit.enabled)
@@ -2301,6 +2875,15 @@ int main(int argc, char** argv) {
 
     // Start HTTP server (blocks until shutdown signal)
     run_http_server();
+
+    // v4.2: Join all active streaming threads before destroying globals
+    {
+        lock_guard<mutex> tlock(g_stream_threads_mutex);
+        for (auto& t : g_stream_threads) {
+            if (t.joinable()) t.join();
+        }
+        g_stream_threads.clear();
+    }
 
     // Cleanup after shutdown
     cout << "Server shut down cleanly." << endl;

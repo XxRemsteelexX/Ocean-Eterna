@@ -11,6 +11,7 @@
 #include <cmath>
 #include <chrono>
 #include <iostream>
+#include <shared_mutex>
 
 // 2-char abbreviation whitelist (kept as keywords despite being short)
 static const std::unordered_set<std::string> ABBREV_WHITELIST = {
@@ -102,16 +103,32 @@ inline void build_stemmed_index(const Corpus& corpus) {
 }
 
 // Get stem for a keyword (uses cache, falls back to computing)
+// Thread-safe: uses shared lock for reads, unique lock for writes
+extern std::shared_mutex g_stem_mutex;
+
 inline std::string get_stem(const std::string& word) {
-    auto it = g_stem_cache.find(word);
-    if (it != g_stem_cache.end()) return it->second;
+    // Fast path: read-only lookup under shared lock
+    {
+        std::shared_lock<std::shared_mutex> rlock(g_stem_mutex);
+        auto it = g_stem_cache.find(word);
+        if (it != g_stem_cache.end()) return it->second;
+    }
+    // Slow path: compute stem and insert under unique lock
     std::string stemmed = porter::stem(word);
-    g_stem_cache[word] = stemmed;
+    {
+        std::unique_lock<std::shared_mutex> wlock(g_stem_mutex);
+        g_stem_cache[word] = stemmed;
+    }
     return stemmed;
 }
 
 // BM25 search - TAAT (Term-At-A-Time) with inverted index
 inline std::vector<Hit> search_bm25(const Corpus& corpus, const std::string& query, int topk) {
+    // v4.2: Guard against empty corpus (division by zero on avgdl)
+    if (corpus.docs.empty() || corpus.avgdl <= 0) {
+        return {};
+    }
+
     std::vector<std::string> raw_terms = extract_text_keywords(query);
 
     std::vector<std::string> query_terms;

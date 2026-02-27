@@ -39,6 +39,9 @@ struct Config {
         int top_k = 8;
         double k1 = 1.5;
         double b = 0.75;
+        int context_window = 1;      // v4.2: adjacent chunks to fetch (0-3)
+        int max_context_chars = 32000; // v4.2: max LLM context size (~8000 tokens)
+        double score_threshold = 0.2;  // v4.2: drop results below this fraction of top score
     } search;
 
     struct {
@@ -46,6 +49,13 @@ struct Config {
         string storage = "guten_9m_build/storage/guten9m.bin";
         string chapter_guide = "guten_9m_build/chapter_guide.json";
     } corpus;
+
+    struct {
+        bool enabled = false;
+        string url = "http://127.0.0.1:8889/rerank";
+        int timeout_ms = 500;
+        int candidate_count = 50;  // how many BM25 results to send to reranker
+    } reranker;
 
     struct {
         bool enabled = false;
@@ -82,11 +92,20 @@ inline Config load_config(const string& path) {
                 cfg.search.top_k = j["search"].value("top_k", cfg.search.top_k);
                 cfg.search.k1 = j["search"].value("bm25_k1", cfg.search.k1);
                 cfg.search.b = j["search"].value("bm25_b", cfg.search.b);
+                cfg.search.context_window = j["search"].value("context_window", cfg.search.context_window);
+                cfg.search.max_context_chars = j["search"].value("max_context_chars", cfg.search.max_context_chars);
+                cfg.search.score_threshold = j["search"].value("score_threshold", cfg.search.score_threshold);
             }
             if (j.contains("corpus")) {
                 cfg.corpus.manifest = j["corpus"].value("manifest", cfg.corpus.manifest);
                 cfg.corpus.storage = j["corpus"].value("storage", cfg.corpus.storage);
                 cfg.corpus.chapter_guide = j["corpus"].value("chapter_guide", cfg.corpus.chapter_guide);
+            }
+            if (j.contains("reranker")) {
+                cfg.reranker.enabled = j["reranker"].value("enabled", cfg.reranker.enabled);
+                cfg.reranker.url = j["reranker"].value("url", cfg.reranker.url);
+                cfg.reranker.timeout_ms = j["reranker"].value("timeout_ms", cfg.reranker.timeout_ms);
+                cfg.reranker.candidate_count = j["reranker"].value("candidate_count", cfg.reranker.candidate_count);
             }
             if (j.contains("auth")) {
                 cfg.auth.enabled = j["auth"].value("enabled", cfg.auth.enabled);

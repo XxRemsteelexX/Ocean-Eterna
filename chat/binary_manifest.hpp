@@ -56,6 +56,11 @@ struct DocMeta {
     uint32_t start;
     uint32_t end;
     long long timestamp = 0;
+    // v4.2: Chunk cross-references for context expansion
+    std::string source_file;        // original filename
+    std::string prev_chunk_id;      // previous chunk in same document
+    std::string next_chunk_id;      // next chunk in same document
+    std::string doc_section;        // hierarchical section path
 };
 #endif
 
