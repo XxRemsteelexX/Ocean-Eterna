@@ -1,0 +1,13 @@
+{
+    "chat_model_provider": "openrouter",
+    "chat_model_name": "google/gemini-3.1-pro-preview",
+    "chat_model_ctx_length": 100000,
+    "chat_model_vision": true,
+    "util_model_provider": "openrouter",
+    "util_model_name": "qwen/qwen3.5-flash-02-23",
+    "util_model_ctx_length": 100000,
+    "browser_model_provider": "openrouter",
+    "browser_model_name": "google/gemini-3.1-pro-preview",
+    "browser_model_vision": true,
+    "mcp_servers": "{\n    \"mcpServers\": {\n        \"ocean-eterna\": {\n            \"description\": \"Ocean Eterna BM25 search engine — 9ms search across 1B+ tokens\",\n            \"command\": \"/opt/venv-a0/bin/python\",\n            \"args\": [\"/opt/ocean-eterna/mcp_server.py\"],\n            \"env\": {\n                \"OE_BASE_URL\": \"http://host.docker.internal:9090\"\n            }\n        }\n    }\n}"
+}

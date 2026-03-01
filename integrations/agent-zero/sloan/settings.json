@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ocean-eterna": {
+      "description": "Ocean Eterna BM25 search engine — 9ms search across 1B+ tokens",
+      "command": "/opt/venv-a0/bin/python",
+      "args": ["/opt/ocean-eterna/mcp_server.py"],
+      "env": {
+        "OE_BASE_URL": "http://host.docker.internal:9090"
+      }
+    }
+  }
+}

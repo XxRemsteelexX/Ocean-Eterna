@@ -45,9 +45,9 @@ struct Config {
     } search;
 
     struct {
-        string manifest = "guten_9m_build/manifest_guten9m.jsonl";
-        string storage = "guten_9m_build/storage/guten9m.bin";
-        string chapter_guide = "guten_9m_build/chapter_guide.json";
+        string manifest = "corpus/manifest.jsonl";
+        string storage = "corpus/storage.bin";
+        string chapter_guide = "corpus/chapter_guide.json";
     } corpus;
 
     struct {

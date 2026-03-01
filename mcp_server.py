@@ -11,15 +11,39 @@ Usage:
 import os
 import json
 import requests
+from pathlib import Path
 from fastmcp import FastMCP
 
 try:
-    from doc_processor import process_document, SUPPORTED_EXTENSIONS
+    from doc_processor import (
+        process_document, process_document_full, SUPPORTED_EXTENSIONS,
+        preserve_original, update_originals_catalog, get_original_by_id,
+        load_originals_catalog,
+    )
     HAS_DOC_PROCESSOR = True
 except ImportError:
     HAS_DOC_PROCESSOR = False
 
 OE_BASE = os.environ.get("OE_BASE_URL", "http://localhost:9090")
+
+# corpus directory — relative to where the C++ server runs (chat/)
+# the MCP server needs to know this for original file operations
+CORPUS_DIR = os.environ.get("OE_CORPUS_DIR", "")
+
+def _find_corpus_dir() -> str:
+    """find the corpus directory automatically."""
+    if CORPUS_DIR:
+        return CORPUS_DIR
+    # try common locations relative to this script
+    script_dir = Path(__file__).parent
+    candidates = [
+        script_dir / "chat" / "corpus",
+        script_dir / "corpus",
+    ]
+    for c in candidates:
+        if c.is_dir():
+            return str(c)
+    return str(script_dir / "chat" / "corpus")
 
 mcp = FastMCP(
     "Ocean Eterna",
@@ -90,14 +114,19 @@ def oe_search(query: str, conversation_id: str = "") -> str:
     if meta:
         parts.append(f"_({', '.join(meta)})_")
 
-    # sources
+    # sources (with original file info)
     sources = data.get("sources", [])
     if sources:
         src_lines = ["**Sources:**"]
         for s in sources[:10]:
             cid = s.get("chunk_id", "?")
             score = s.get("score", 0)
-            src_lines.append(f"- `{cid}` (score: {score:.2f})")
+            line = f"- `{cid}` (score: {score:.2f})"
+            if "original_file_id" in s:
+                orig_name = s.get("original_name", "")
+                category = s.get("category", "")
+                line += f" | original: {orig_name} [{category}] (id: {s['original_file_id']})"
+            src_lines.append(line)
         parts.append("\n".join(src_lines))
 
     # conversation tracking
@@ -213,6 +242,11 @@ def oe_stats() -> str:
     if stat_lines:
         parts.append("\n".join(stat_lines))
 
+    # show originals count
+    originals = _get("/originals")
+    if "total" in originals:
+        parts.append(f"- original_files: {originals['total']}")
+
     return "\n\n".join(parts)
 
 
@@ -292,9 +326,12 @@ def oe_tell_me_more(turn_id: str) -> str:
 def oe_add_document(path: str) -> str:
     """Ingest a document in any supported format into Ocean Eterna.
 
-    Supports: PDF, DOCX, XLSX, CSV, PNG, JPG, TXT, MD.
+    Supports: PDF, DOCX, XLSX, CSV, PNG, JPG, TXT, MD, PPTX, HTML,
+    Jupyter notebooks (.ipynb), and code files (.py, .js, .cpp, .java, .sql, etc.).
+
     The document is preprocessed (text extracted, OCR if image),
     normalized to clean paragraphs, and sent to the search index.
+    The original file is preserved and can be retrieved later.
 
     Args:
         path: Absolute path to the document file.
@@ -303,23 +340,103 @@ def oe_add_document(path: str) -> str:
         return "Error: doc_processor not available. Install: pip install pymupdf pytesseract"
 
     try:
-        filename, content = process_document(path)
+        doc_info = process_document_full(path)
     except Exception as e:
         return f"Preprocessing failed: {e}"
+
+    filename = doc_info["filename"]
+    content = doc_info["content"]
+    category = doc_info["category"]
+    summary = doc_info["summary"]
 
     if not content.strip():
         return f"No text content extracted from {path}"
 
+    # preserve original file
+    corpus_dir = _find_corpus_dir()
+    try:
+        orig_entry = preserve_original(path, corpus_dir)
+        orig_entry["summary"] = summary
+    except Exception as e:
+        # non-fatal — continue without preservation
+        orig_entry = None
+        print(f"Warning: Could not preserve original: {e}")
+
+    # send extracted text to OE for indexing
     data = _post("/add-file", {"filename": filename, "content": content})
 
     if data.get("success"):
-        return (
+        chunk_ids = data.get("chunk_ids", [])
+
+        # update original entry with chunk IDs and save catalog
+        if orig_entry:
+            orig_entry["chunk_ids"] = chunk_ids
+            try:
+                update_originals_catalog(corpus_dir, orig_entry)
+            except Exception as e:
+                print(f"Warning: Could not update originals catalog: {e}")
+
+        file_id = orig_entry["file_id"] if orig_entry else None
+        result = (
             f"Ingested **{filename}**: "
             f"{data.get('chunks_added', 0)} chunks, "
             f"{data.get('tokens_added', 0)} tokens "
-            f"({len(content):,} chars extracted)"
+            f"({len(content):,} chars extracted)\n"
+            f"Category: {category}\n"
+            f"Summary: {summary[:150]}"
         )
+        if file_id:
+            result += f"\nOriginal preserved: {file_id}"
+        return result
+
     return f"Ingestion failed: {data.get('error', json.dumps(data))}"
+
+
+@mcp.tool()
+def oe_get_original(file_id: str) -> str:
+    """Retrieve information about an original file by its file_id.
+
+    After searching, if a source has an original_file_id, use this
+    to get details about the original file and its download path.
+
+    Args:
+        file_id: The original file identifier (from search results).
+    """
+    # try the server endpoint first
+    try:
+        r = requests.get(f"{OE_BASE}/originals", timeout=10)
+        data = r.json()
+        for entry in data.get("files", []):
+            if entry.get("file_id") == file_id:
+                parts = [f"**Original File: {entry.get('original_name', '?')}**"]
+                parts.append(f"- File ID: {entry.get('file_id')}")
+                parts.append(f"- Format: {entry.get('format', '?')}")
+                parts.append(f"- Category: {entry.get('category', '?')}")
+                parts.append(f"- Size: {entry.get('size_bytes', 0):,} bytes")
+                parts.append(f"- Ingested: {entry.get('ingested_at', '?')}")
+                if entry.get("summary"):
+                    parts.append(f"- Summary: {entry['summary'][:200]}")
+                chunks = entry.get("chunk_ids", [])
+                if chunks:
+                    parts.append(f"- Chunks: {len(chunks)} ({', '.join(chunks[:5])}{'...' if len(chunks) > 5 else ''})")
+                parts.append(f"\nDownload: GET {OE_BASE}/original/{file_id}")
+                return "\n".join(parts)
+    except Exception:
+        pass
+
+    # fallback to local catalog
+    corpus_dir = _find_corpus_dir()
+    entry = get_original_by_id(corpus_dir, file_id)
+    if entry:
+        parts = [f"**Original File: {entry.get('original_name', '?')}**"]
+        parts.append(f"- File ID: {entry.get('file_id')}")
+        parts.append(f"- Format: {entry.get('format', '?')}")
+        parts.append(f"- Category: {entry.get('category', '?')}")
+        parts.append(f"- Size: {entry.get('size_bytes', 0):,} bytes")
+        parts.append(f"- Stored: {entry.get('stored_path', '?')}")
+        return "\n".join(parts)
+
+    return f"Original file not found: {file_id}"
 
 
 @mcp.tool()
@@ -360,11 +477,17 @@ A BM25 search engine for your personal knowledge — conversations, documents, n
 - **oe_get_chunk(chunk_id)** — Get full text of a specific chunk.
 - **oe_add_file(filename, content)** — Add new content to the index.
 - **oe_add_file_path(path)** — Index a plaintext file from disk.
-- **oe_add_document(path)** — Ingest PDF, DOCX, XLSX, CSV, or image (OCR).
+- **oe_add_document(path)** — Ingest any document (PDF, DOCX, XLSX, CSV, PPTX, images, code, notebooks). Preserves the original file.
+- **oe_get_original(file_id)** — Get info about a preserved original file.
 - **oe_stats()** — Check server health and corpus size.
 - **oe_catalog()** — Browse what's indexed.
 - **oe_tell_me_more(turn_id)** — Expand previous search results.
 - **oe_reconstruct(chunk_ids)** — Combine chunks into full document.
+
+## Original File Preservation:
+When you ingest a document with oe_add_document, the original file is preserved.
+Search results include original_file_id when available — use oe_get_original to
+retrieve the file info and download link.
 
 ## Tips:
 - Search with your own words — BM25 matches vocabulary, not semantics.

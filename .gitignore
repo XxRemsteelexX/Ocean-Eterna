@@ -12,9 +12,10 @@ chat/corpus/*.json
 test_data/
 
 # Compiled binaries
-ocean_chat_server_v4
-ocean_chat_server_v42
+ocean_chat_server
+ocean_chat_server_v*
 ocean_chat_server_fixed
+ocean_chat_server_prod
 *.o
 *.out
 
@@ -51,3 +52,17 @@ __pycache__/
 # Environment
 .env
 .env.local
+secrets.env
+
+# Sloan data files (binary/private)
+*.db
+*.faiss
+*.pkl
+integrations/agent-zero/sloan/sloan-data/chats/
+integrations/agent-zero/sloan/sloan-data/memory/
+integrations/agent-zero/sloan/sloan-data/uploads/
+integrations/agent-zero/sloan/sloan-data/workdir/*.tar.gz
+integrations/agent-zero/sloan/sloan-data/workdir/*.png
+
+# Corpus originals (user files)
+chat/corpus/originals/

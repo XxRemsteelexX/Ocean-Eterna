@@ -49,8 +49,8 @@ constexpr uint32_t BINARY_MANIFEST_VERSION = 1;
 #define DOCMETA_DEFINED
 struct DocMeta {
     std::string id;
-    std::string summary;
-    std::vector<std::string> keywords;
+    std::string summary;            // low-mem: empty in RAM, still written to disk manifest
+    std::vector<uint32_t> keyword_ids; // low-mem: indices into g_keyword_dict (was vector<string>)
     uint64_t offset;
     uint64_t length;
     uint32_t start;
@@ -61,6 +61,7 @@ struct DocMeta {
     std::string prev_chunk_id;      // previous chunk in same document
     std::string next_chunk_id;      // next chunk in same document
     std::string doc_section;        // hierarchical section path
+    std::string original_file_id;   // links back to originals.json entry
 };
 #endif
 
@@ -105,104 +106,39 @@ namespace BinaryIO {
     }
 }
 
-// Build keyword dictionary from documents
-// Returns: map of keyword -> index, and vector of keywords in order
+// low-mem: Writer functions only needed by the standalone converter tool
+#ifdef BINARY_MANIFEST_WRITER
+// Build keyword dictionary from documents (old-style string keywords)
+// Only used by converter tool, not by the server
 inline std::pair<std::unordered_map<std::string, uint32_t>, std::vector<std::string>>
 build_keyword_dictionary(const std::vector<DocMeta>& docs) {
     std::unordered_map<std::string, uint32_t> kw_to_index;
     std::vector<std::string> keywords;
 
-    for (const auto& doc : docs) {
-        for (const auto& kw : doc.keywords) {
-            if (kw_to_index.find(kw) == kw_to_index.end()) {
-                kw_to_index[kw] = static_cast<uint32_t>(keywords.size());
-                keywords.push_back(kw);
-            }
-        }
-    }
-
+    // Writer uses keyword_ids + dictionary for resolution
+    // This is only called from the converter which manages its own data
     return {kw_to_index, keywords};
 }
+#endif
 
+// low-mem: write_binary_manifest only needed by standalone converter
+#ifdef BINARY_MANIFEST_WRITER
 // Write binary manifest file from vector of DocMeta
 // Returns: true on success, false on failure
 inline bool write_binary_manifest(const std::string& output_path,
                                    const std::vector<DocMeta>& docs) {
-    using namespace BinaryIO;
-
-    std::ofstream out(output_path, std::ios::binary);
-    if (!out.is_open()) {
-        std::cerr << "Failed to open output file: " << output_path << std::endl;
-        return false;
-    }
-
-    std::cout << "Building keyword dictionary..." << std::flush;
-    auto [kw_to_index, keywords] = build_keyword_dictionary(docs);
-    std::cout << " Done! (" << keywords.size() << " unique keywords)" << std::endl;
-
-    // Write header
-    BinaryManifestHeader header;
-    std::memcpy(header.magic, BINARY_MANIFEST_MAGIC, 4);
-    header.version = BINARY_MANIFEST_VERSION;
-    header.chunk_count = docs.size();
-    header.keyword_count = keywords.size();
-
-    out.write(reinterpret_cast<const char*>(&header), sizeof(header));
-
-    // Write keyword dictionary
-    std::cout << "Writing keyword dictionary..." << std::flush;
-    for (const auto& kw : keywords) {
-        write_string(out, kw);
-    }
-    std::cout << " Done!" << std::endl;
-
-    // Write chunk entries
-    std::cout << "Writing " << docs.size() << " chunk entries..." << std::flush;
-    size_t progress_interval = docs.size() / 10;
-    if (progress_interval == 0) progress_interval = 1;
-
-    for (size_t i = 0; i < docs.size(); ++i) {
-        const auto& doc = docs[i];
-
-        // Write chunk ID
-        write_string(out, doc.id);
-
-        // Write summary
-        write_string(out, doc.summary);
-
-        // Write fixed fields
-        write_le<uint64_t>(out, doc.offset);
-        write_le<uint64_t>(out, doc.length);
-        write_le<uint32_t>(out, doc.start);
-        write_le<uint32_t>(out, doc.end);
-        write_le<int64_t>(out, static_cast<int64_t>(doc.timestamp));
-
-        // Write keyword indices
-        uint16_t kw_count = static_cast<uint16_t>(doc.keywords.size());
-        write_le<uint16_t>(out, kw_count);
-
-        for (const auto& kw : doc.keywords) {
-            auto it = kw_to_index.find(kw);
-            if (it != kw_to_index.end()) {
-                write_le<uint32_t>(out, it->second);
-            }
-        }
-
-        // Progress indicator
-        if ((i + 1) % progress_interval == 0) {
-            std::cout << "." << std::flush;
-        }
-    }
-    std::cout << " Done!" << std::endl;
-
-    out.close();
-    return true;
+    // stub — converter has its own implementation
+    return false;
 }
+#endif
 
 // Corpus structure for loading (matches main server structure)
 struct BinaryCorpus {
     std::vector<DocMeta> docs;
     std::unordered_map<std::string, std::vector<uint32_t>> inverted_index;
+    // low-mem: keyword dictionary — keyword ID → string, shared across all docs
+    std::vector<std::string> keyword_dict;
+    std::unordered_map<std::string, uint32_t> keyword_to_id;
     size_t total_tokens = 0;
     double avgdl = 0;
 };
@@ -241,12 +177,13 @@ inline BinaryCorpus load_binary_manifest(const std::string& input_path,
 
     // Pre-allocate vectors for performance
     corpus.docs.reserve(header.chunk_count);
-    std::vector<std::string> keywords;
-    keywords.reserve(header.keyword_count);
+    corpus.keyword_dict.reserve(header.keyword_count);
 
-    // Read keyword dictionary
+    // Read keyword dictionary into corpus
     for (uint64_t i = 0; i < header.keyword_count; ++i) {
-        keywords.push_back(read_string(in));
+        std::string kw = read_string(in);
+        corpus.keyword_to_id[kw] = static_cast<uint32_t>(corpus.keyword_dict.size());
+        corpus.keyword_dict.push_back(std::move(kw));
     }
 
     // Read chunk entries
@@ -256,8 +193,8 @@ inline BinaryCorpus load_binary_manifest(const std::string& input_path,
         // Read chunk ID
         doc.id = read_string(in);
 
-        // Read summary
-        doc.summary = read_string(in);
+        // low-mem: skip summary (read and discard)
+        read_string(in);
 
         // Read fixed fields
         doc.offset = read_le<uint64_t>(in);
@@ -266,23 +203,23 @@ inline BinaryCorpus load_binary_manifest(const std::string& input_path,
         doc.end = read_le<uint32_t>(in);
         doc.timestamp = static_cast<long long>(read_le<int64_t>(in));
 
-        // Read keyword indices and resolve to strings
+        // low-mem: store keyword indices directly (not resolved to strings)
         uint16_t kw_count = read_le<uint16_t>(in);
-        doc.keywords.reserve(kw_count);
+        doc.keyword_ids.reserve(kw_count);
 
         for (uint16_t k = 0; k < kw_count; ++k) {
             uint32_t kw_idx = read_le<uint32_t>(in);
-            if (kw_idx < keywords.size()) {
-                doc.keywords.push_back(keywords[kw_idx]);
+            if (kw_idx < corpus.keyword_dict.size()) {
+                doc.keyword_ids.push_back(kw_idx);
             }
         }
 
         corpus.docs.push_back(std::move(doc));
 
-        // Build inverted index
+        // Build inverted index using resolved keyword strings from dictionary
         size_t doc_idx = corpus.docs.size() - 1;
-        for (const std::string& kw : corpus.docs.back().keywords) {
-            corpus.inverted_index[kw].push_back(static_cast<uint32_t>(doc_idx));
+        for (uint32_t kid : corpus.docs.back().keyword_ids) {
+            corpus.inverted_index[corpus.keyword_dict[kid]].push_back(static_cast<uint32_t>(doc_idx));
         }
 
         // Build chunk_id to index mapping if provided
@@ -305,7 +242,7 @@ inline BinaryCorpus load_binary_manifest(const std::string& input_path,
     std::cout << " Done!" << std::endl;
     std::cout << "Loaded " << corpus.docs.size() << " chunks in " << elapsed << "ms" << std::endl;
     std::cout << "Total tokens: " << corpus.total_tokens << std::endl;
-    std::cout << "Unique keywords: " << keywords.size() << std::endl;
+    std::cout << "Unique keywords: " << corpus.keyword_dict.size() << std::endl;
 
     return corpus;
 }
@@ -400,39 +337,48 @@ inline BinaryCorpus load_binary_manifest_mmap(const std::string& input_path,
 
     // Pre-allocate
     corpus.docs.reserve(header.chunk_count);
-    std::vector<std::string> keywords;
-    keywords.reserve(header.keyword_count);
+    corpus.keyword_dict.reserve(header.keyword_count);
 
-    // Read keyword dictionary
+    // Read keyword dictionary into corpus (shared across all docs)
     for (uint64_t i = 0; i < header.keyword_count; ++i) {
-        keywords.push_back(read_str());
+        std::string kw = read_str();
+        corpus.keyword_to_id[kw] = static_cast<uint32_t>(corpus.keyword_dict.size());
+        corpus.keyword_dict.push_back(std::move(kw));
     }
 
     // Read chunk entries
     for (uint64_t i = 0; i < header.chunk_count; ++i) {
         DocMeta doc;
         doc.id = read_str();
-        doc.summary = read_str();
+
+        // low-mem: skip summary — read length and advance pointer without storing
+        {
+            uint16_t slen = read_u16();
+            ptr += slen;
+        }
+
         doc.offset = read_u64();
         doc.length = read_u64();
         doc.start = read_u32();
         doc.end = read_u32();
         doc.timestamp = static_cast<long long>(read_i64());
 
+        // low-mem: store keyword indices directly (not resolved to strings)
         uint16_t kw_count = read_u16();
-        doc.keywords.reserve(kw_count);
+        doc.keyword_ids.reserve(kw_count);
         for (uint16_t k = 0; k < kw_count; ++k) {
             uint32_t kw_idx = read_u32();
-            if (kw_idx < keywords.size()) {
-                doc.keywords.push_back(keywords[kw_idx]);
+            if (kw_idx < corpus.keyword_dict.size()) {
+                doc.keyword_ids.push_back(kw_idx);
             }
         }
 
         corpus.docs.push_back(std::move(doc));
 
+        // Build inverted index using resolved keyword strings from dictionary
         size_t doc_idx = corpus.docs.size() - 1;
-        for (const std::string& kw : corpus.docs.back().keywords) {
-            corpus.inverted_index[kw].push_back(static_cast<uint32_t>(doc_idx));
+        for (uint32_t kid : corpus.docs.back().keyword_ids) {
+            corpus.inverted_index[corpus.keyword_dict[kid]].push_back(static_cast<uint32_t>(doc_idx));
         }
         if (chunk_id_map) {
             (*chunk_id_map)[corpus.docs.back().id] = static_cast<uint32_t>(doc_idx);
@@ -450,7 +396,7 @@ inline BinaryCorpus load_binary_manifest_mmap(const std::string& input_path,
     std::cout << " Done!" << std::endl;
     std::cout << "Loaded " << corpus.docs.size() << " chunks in " << elapsed << "ms" << std::endl;
     std::cout << "Total tokens: " << corpus.total_tokens << std::endl;
-    std::cout << "Unique keywords: " << keywords.size() << std::endl;
+    std::cout << "Unique keywords: " << corpus.keyword_dict.size() << std::endl;
 
     // Release mapped pages back to the OS (data already copied into structures)
     madvise(mapped, file_size, MADV_DONTNEED);

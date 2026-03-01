@@ -94,9 +94,28 @@ struct Corpus {
     // Maps keyword -> (doc_id -> term_frequency)
     // Only populated for new docs; legacy docs assumed tf=1
     unordered_map<string, unordered_map<uint32_t, uint16_t>> tf_index;
+    // low-mem: global keyword dictionary — keyword ID <-> string
+    vector<string> keyword_dict;
+    unordered_map<string, uint32_t> keyword_to_id;
     size_t total_tokens = 0;
     double avgdl = 0;
 };
+
+// low-mem: intern a keyword string, returning its uint32_t ID
+// adds to dictionary if not already present
+inline uint32_t intern_keyword(Corpus& corpus, const string& kw) {
+    auto it = corpus.keyword_to_id.find(kw);
+    if (it != corpus.keyword_to_id.end()) return it->second;
+    uint32_t id = static_cast<uint32_t>(corpus.keyword_dict.size());
+    corpus.keyword_to_id[kw] = id;
+    corpus.keyword_dict.push_back(kw);
+    return id;
+}
+
+// low-mem: resolve keyword ID to string
+inline const string& resolve_keyword(const Corpus& corpus, uint32_t id) {
+    return corpus.keyword_dict[id];
+}
 
 // Stemming support: stem cache and reverse mapping
 // Protected by g_stem_mutex for thread-safe concurrent access
@@ -164,7 +183,7 @@ struct ConversationTurn {
 // LRU cache: list maintains insertion order (front=newest), map provides O(1) lookup
 list<pair<string, ConversationTurn>> recent_turns_list;
 unordered_map<string, list<pair<string, ConversationTurn>>::iterator> recent_turns_cache;
-const size_t MAX_CACHED_TURNS = 100;
+const size_t MAX_CACHED_TURNS = 20;  // low-memory: reduced from 100
 
 // No longer needed - conversation chunks are stored in main corpus
 
@@ -179,6 +198,51 @@ struct Stats {
 // Feature 4: Chapter guide for navigation
 json chapter_guide;
 string chapter_guide_path = "guten_9m_build/chapter_guide.json";
+
+// Original file catalog — tracks preserved original documents
+json originals_catalog = json::array();
+string originals_catalog_path = "corpus/originals.json";
+mutex originals_mutex;
+
+// Build a lookup from chunk_id to original_file_id
+unordered_map<string, string> chunk_to_original;
+
+void load_originals_catalog() {
+    ifstream f(originals_catalog_path);
+    if (!f.is_open()) {
+        originals_catalog = json::array();
+        return;
+    }
+    try {
+        originals_catalog = json::parse(f);
+        // rebuild chunk_to_original lookup
+        chunk_to_original.clear();
+        for (const auto& entry : originals_catalog) {
+            string fid = entry.value("file_id", "");
+            if (entry.contains("chunk_ids") && entry["chunk_ids"].is_array()) {
+                for (const auto& cid : entry["chunk_ids"]) {
+                    chunk_to_original[cid.get<string>()] = fid;
+                }
+            }
+        }
+        cout << "Loaded originals catalog: " << originals_catalog.size()
+             << " files, " << chunk_to_original.size() << " chunk mappings" << endl;
+    } catch (const exception& e) {
+        cerr << "Warning: Failed to parse originals catalog: " << e.what() << endl;
+        originals_catalog = json::array();
+    }
+}
+
+void save_originals_catalog() {
+    try {
+        ofstream f(originals_catalog_path);
+        if (f.is_open()) {
+            f << originals_catalog.dump(2);
+        }
+    } catch (const exception& e) {
+        cerr << "Warning: Failed to save originals catalog: " << e.what() << endl;
+    }
+}
 mutex chapter_guide_mutex;
 
 // Forward declarations
@@ -206,7 +270,7 @@ Corpus load_manifest(const string& path) {
 
             DocMeta doc;
             doc.id = obj.value("chunk_id", "");
-            doc.summary = obj.value("summary", "");
+            // low-mem: skip summary in RAM
             doc.offset = obj.value("offset", 0ULL);
             doc.length = obj.value("length", 0ULL);
             doc.start = obj.value("token_start", 0U);
@@ -215,7 +279,8 @@ Corpus load_manifest(const string& path) {
 
             if (obj.contains("keywords") && obj["keywords"].is_array()) {
                 for (const auto& kw : obj["keywords"]) {
-                    doc.keywords.push_back(kw.get<string>());
+                    string kw_str = kw.get<string>();
+                    doc.keyword_ids.push_back(intern_keyword(corpus, kw_str));
                 }
             }
 
@@ -226,9 +291,9 @@ Corpus load_manifest(const string& path) {
 
             corpus.docs.push_back(doc);
 
-            // Build inverted index
-            for (const string& kw : doc.keywords) {
-                corpus.inverted_index[kw].push_back(corpus.docs.size() - 1);
+            // Build inverted index using resolved keyword strings
+            for (uint32_t kid : corpus.docs.back().keyword_ids) {
+                corpus.inverted_index[resolve_keyword(corpus, kid)].push_back(corpus.docs.size() - 1);
             }
 
             // Feature 2: Build chunk_id to index mapping for O(1) lookup
@@ -782,8 +847,11 @@ void save_conversation_turn(const ConversationTurn& turn) {
 
         DocMeta doc;
         doc.id = turn.chunk_id;
-        doc.summary = summary;
-        doc.keywords = keywords;
+        // low-mem: don't store summary in RAM
+        // low-mem: intern keyword strings to IDs
+        for (const string& kw : keywords) {
+            doc.keyword_ids.push_back(intern_keyword(global_corpus, kw));
+        }
         doc.offset = offset;
         doc.length = compressed_data.size();
         doc.start = 0;
@@ -849,8 +917,8 @@ bool clear_conversation_database() {
         chunk_id_to_index.clear();
 
         for (uint32_t i = 0; i < docs.size(); i++) {
-            for (const string& kw : docs[i].keywords) {
-                global_corpus.inverted_index[kw].push_back(i);
+            for (uint32_t kid : docs[i].keyword_ids) {
+                global_corpus.inverted_index[resolve_keyword(global_corpus, kid)].push_back(i);
             }
             chunk_id_to_index[docs[i].id] = i;
         }
@@ -1145,8 +1213,11 @@ json add_file_to_index(const string& filename, const string& content) {
 
             DocMeta doc;
             doc.id = chunk.chunk_id;
-            doc.summary = chunk.summary;
-            doc.keywords = chunk.keywords;
+            // low-mem: don't store summary in RAM
+            // low-mem: intern keyword strings to IDs
+            for (const string& kw : chunk.keywords) {
+                doc.keyword_ids.push_back(intern_keyword(global_corpus, kw));
+            }
             doc.offset = current_offset;
             doc.length = chunk.compressed.size();
             doc.start = total_tokens;
@@ -1219,6 +1290,12 @@ json add_file_to_index(const string& filename, const string& content) {
         static_cast<double>(total_doc_length) / global_corpus.docs.size();
 
     DEBUG_ERR("Building result JSON...");
+    // collect chunk IDs for original file tracking
+    json chunk_id_list = json::array();
+    for (const auto& chunk : chunks) {
+        chunk_id_list.push_back(chunk.chunk_id);
+    }
+
     json result;
     result["success"] = true;
     result["filename"] = make_json_safe(filename);
@@ -1226,6 +1303,7 @@ json add_file_to_index(const string& filename, const string& content) {
     result["tokens_added"] = (uint64_t)total_tokens;
     result["total_chunks"] = (uint64_t)global_corpus.docs.size();
     result["total_tokens"] = (uint64_t)(global_corpus.total_tokens + total_tokens);
+    result["chunk_ids"] = chunk_id_list;
     cout << "Result JSON built successfully" << endl;
     return result;
 }
@@ -1334,7 +1412,8 @@ vector<Hit> search_conversation_chunks_only_locked(const string& query, int max_
         transform(query_lower.begin(), query_lower.end(), query_lower.begin(), ::tolower);
 
         // Check if any keywords from the conversation match the query
-        for (const string& keyword : doc.keywords) {
+        for (uint32_t kid : doc.keyword_ids) {
+            const string& keyword = resolve_keyword(global_corpus, kid);
             string kw_lower = keyword;
             transform(kw_lower.begin(), kw_lower.end(), kw_lower.begin(), ::tolower);
 
@@ -1345,12 +1424,7 @@ vector<Hit> search_conversation_chunks_only_locked(const string& query, int max_
             }
         }
 
-        // Also check summary for direct matches (in case keywords miss something)
-        string summary_lower = doc.summary;
-        transform(summary_lower.begin(), summary_lower.end(), summary_lower.begin(), ::tolower);
-        if (summary_lower.find(query_lower) != string::npos) {
-            has_match = true;
-        }
+        // low-mem: summary not stored in RAM, skip summary matching
 
         if (has_match) {
             Hit hit;
@@ -1576,6 +1650,21 @@ json get_system_stats() {
     stats_json["ram_used_gb"] = round(ram_used_gb * 10) / 10.0;
     stats_json["ram_total_gb"] = round(ram_total_gb * 10) / 10.0;
 
+    // low-memory: report process RSS
+    {
+        long rss_kb = 0;
+        ifstream proc_status("/proc/self/status");
+        string pline;
+        while (getline(proc_status, pline)) {
+            if (pline.substr(0, 6) == "VmRSS:") {
+                stringstream pss(pline.substr(6));
+                pss >> rss_kb;
+                break;
+            }
+        }
+        stats_json["process_rss_mb"] = rss_kb / 1024;
+    }
+
     // Thread safety: lock stats and corpus for read
     {
         lock_guard<mutex> slock(stats_mutex);
@@ -1589,6 +1678,9 @@ json get_system_stats() {
         stats_json["total_queries"] = stats.total_queries;
         stats_json["avg_search_ms"] = stats.total_queries > 0 ? stats.total_search_time_ms / stats.total_queries : 0;
         stats_json["avg_llm_ms"] = stats.total_queries > 0 ? stats.total_llm_time_ms / stats.total_queries : 0;
+        stats_json["unique_keywords"] = global_corpus.inverted_index.size();
+        stats_json["stem_cache_size"] = g_stem_cache.size();
+        stats_json["stem_reverse_size"] = g_stem_to_keywords.size();
     }
 
     return stats_json;
@@ -1633,6 +1725,11 @@ void load_chapter_guide() {
 // Feature 4: Update chapter guide with new conversation
 void update_chapter_guide_conversation(const ConversationTurn& turn) {
     lock_guard<mutex> lock(chapter_guide_mutex);
+
+    // Ensure conversations is an object (may be null from empty chapter guide)
+    if (!chapter_guide.contains("conversations") || chapter_guide["conversations"].is_null()) {
+        chapter_guide["conversations"] = json::object();
+    }
 
     // Update conversation count
     int conv_count = chapter_guide["conversations"].value("count", 0) + 1;
@@ -2019,13 +2116,28 @@ json handle_chat(const string& question) {
     response["tentacles"] = get_tentacle_count();
     response["turn_id"] = turn.chunk_id;
 
-    // Include source IDs
+    // Include source IDs with original file info
     json source_ids = json::array();
     for (const auto& ref : turn.source_refs) {
-        source_ids.push_back({
+        json src = {
             {"chunk_id", make_json_safe(ref.chunk_id)},
             {"score", ref.relevance_score}
-        });
+        };
+        // attach original file info if this chunk has one
+        auto oit = chunk_to_original.find(ref.chunk_id);
+        if (oit != chunk_to_original.end()) {
+            src["original_file_id"] = oit->second;
+            // find the original entry for name and category
+            lock_guard<mutex> olock(originals_mutex);
+            for (const auto& entry : originals_catalog) {
+                if (entry.value("file_id", "") == oit->second) {
+                    src["original_name"] = entry.value("original_name", "");
+                    src["category"] = entry.value("category", "");
+                    break;
+                }
+            }
+        }
+        source_ids.push_back(src);
     }
     response["sources"] = source_ids;
 
@@ -2160,8 +2272,9 @@ void run_http_server() {
             json response = handle_chat(question);
             res.set_content(response.dump(), "application/json");
         } catch (const exception& e) {
-            res.status = 400;
-            res.set_content(json({{"error", "Invalid request"}}).dump(), "application/json");
+            res.status = 500;
+            cerr << "[ERROR] /chat exception: " << e.what() << endl;
+            res.set_content(json({{"error", string("Chat error: ") + e.what()}}).dump(), "application/json");
         }
     });
 
@@ -2635,7 +2748,7 @@ void run_http_server() {
                 json entry = {
                     {"chunk_id", doc.id},
                     {"summary", doc.summary},
-                    {"keywords_count", doc.keywords.size()}
+                    {"keywords_count", doc.keyword_ids.size()}
                 };
                 if (!doc.source_file.empty()) entry["source_file"] = doc.source_file;
                 if (!doc.prev_chunk_id.empty()) entry["prev_chunk_id"] = doc.prev_chunk_id;
@@ -2789,6 +2902,72 @@ void run_http_server() {
         }
     });
 
+    // GET /original/{file_id} — serve an original file back to the user
+    svr.Get(R"(/original/(.+))", [](const httplib::Request& req, httplib::Response& res) {
+        string file_id = req.matches[1];
+
+        lock_guard<mutex> olock(originals_mutex);
+        for (const auto& entry : originals_catalog) {
+            if (entry.value("file_id", "") == file_id) {
+                string stored_path = entry.value("stored_path", "");
+                if (stored_path.empty()) {
+                    res.status = 404;
+                    res.set_content(json({{"error", "Original file path not recorded"}}).dump(), "application/json");
+                    return;
+                }
+
+                // stored_path is relative to corpus dir — prepend "corpus/"
+                string full_path = "corpus/" + stored_path;
+                ifstream file(full_path, ios::binary);
+                if (!file.is_open()) {
+                    // try as-is (in case stored_path is already absolute or correct)
+                    file.open(stored_path, ios::binary);
+                    if (!file.is_open()) {
+                        res.status = 404;
+                        res.set_content(json({{"error", "Original file not found on disk: " + stored_path}}).dump(), "application/json");
+                        return;
+                    }
+                }
+
+                // read entire file
+                string body((istreambuf_iterator<char>(file)), istreambuf_iterator<char>());
+                file.close();
+
+                // set content type based on format
+                string fmt = entry.value("format", "bin");
+                string content_type = "application/octet-stream";
+                if (fmt == "pdf") content_type = "application/pdf";
+                else if (fmt == "docx") content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+                else if (fmt == "xlsx") content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+                else if (fmt == "pptx") content_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+                else if (fmt == "csv") content_type = "text/csv";
+                else if (fmt == "txt" || fmt == "md") content_type = "text/plain";
+                else if (fmt == "html" || fmt == "htm") content_type = "text/html";
+                else if (fmt == "png") content_type = "image/png";
+                else if (fmt == "jpg" || fmt == "jpeg") content_type = "image/jpeg";
+                else if (fmt == "py" || fmt == "js" || fmt == "cpp" || fmt == "java" ||
+                         fmt == "sql" || fmt == "r" || fmt == "go" || fmt == "rs") content_type = "text/plain";
+
+                string original_name = entry.value("original_name", "file." + fmt);
+                res.set_header("Content-Disposition", "attachment; filename=\"" + original_name + "\"");
+                res.set_content(body, content_type);
+                return;
+            }
+        }
+
+        res.status = 404;
+        res.set_content(json({{"error", "Original file not found: " + file_id}}).dump(), "application/json");
+    });
+
+    // GET /originals — list all original files in the catalog
+    svr.Get("/originals", [](const httplib::Request&, httplib::Response& res) {
+        lock_guard<mutex> olock(originals_mutex);
+        json result;
+        result["total"] = originals_catalog.size();
+        result["files"] = originals_catalog;
+        res.set_content(result.dump(), "application/json");
+    });
+
     cout << "\n🌊 OceanEterna Chat Server running on http://localhost:" << HTTP_PORT << endl;
     cout << "Open ocean_chat.html in your browser to start chatting!\n" << endl;
 
@@ -2826,6 +3005,8 @@ int main(int argc, char** argv) {
         BinaryCorpus bc = load_binary_manifest_mmap(binary_manifest_path, &chunk_id_to_index);
         global_corpus.docs = std::move(bc.docs);
         global_corpus.inverted_index = std::move(bc.inverted_index);
+        global_corpus.keyword_dict = std::move(bc.keyword_dict);
+        global_corpus.keyword_to_id = std::move(bc.keyword_to_id);
         global_corpus.total_tokens = bc.total_tokens;
         global_corpus.avgdl = bc.avgdl;
     } else {
@@ -2835,12 +3016,45 @@ int main(int argc, char** argv) {
     }
 
     if (global_corpus.docs.empty()) {
-        cerr << "Failed to load corpus!" << endl;
-        return 1;
+        cout << "Corpus is empty — starting with 0 chunks (add data via /add-file or /add-file-path)" << endl;
+    }
+
+    // low-memory: report RSS after corpus load
+    {
+        long rss_kb = 0;
+        ifstream proc_status("/proc/self/status");
+        string line;
+        while (getline(proc_status, line)) {
+            if (line.substr(0, 6) == "VmRSS:") {
+                stringstream ss(line.substr(6));
+                ss >> rss_kb;
+                break;
+            }
+        }
+        cout << "[mem] after corpus load: " << rss_kb / 1024 << " MB RSS, "
+             << global_corpus.docs.size() << " chunks, "
+             << global_corpus.inverted_index.size() << " keywords" << endl;
     }
 
     // Build stemmed inverted index for improved recall
     build_stemmed_index(global_corpus);
+
+    // low-memory: report RSS after stem index
+    {
+        long rss_kb = 0;
+        ifstream proc_status("/proc/self/status");
+        string line;
+        while (getline(proc_status, line)) {
+            if (line.substr(0, 6) == "VmRSS:") {
+                stringstream ss(line.substr(6));
+                ss >> rss_kb;
+                break;
+            }
+        }
+        cout << "[mem] after stem index: " << rss_kb / 1024 << " MB RSS, "
+             << g_stem_cache.size() << " stem entries, "
+             << g_stem_to_keywords.size() << " reverse entries" << endl;
+    }
 
     // Load conversation history
     cout << "Loading conversation history..." << endl;
@@ -2855,6 +3069,11 @@ int main(int argc, char** argv) {
     // Feature 4: Load chapter guide for navigation
     cout << "Loading chapter guide..." << endl;
     load_chapter_guide();
+
+    // Load original files catalog
+    originals_catalog_path = "corpus/originals.json";
+    cout << "Loading originals catalog..." << endl;
+    load_originals_catalog();
 
     // Speed Improvement #2 & #3: Build BM25S pre-computed index with BlockWeakAnd
     // v3: Using original BM25 search (500ms) - no BM25S overhead

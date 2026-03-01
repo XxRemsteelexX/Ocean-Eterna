@@ -166,7 +166,7 @@ inline std::vector<Hit> search_bm25(const Corpus& corpus, const std::string& que
             auto tf_kw_it = corpus.tf_index.find(orig_kw);
 
             for (uint32_t doc_idx : inv_it->second) {
-                int doc_len = corpus.docs[doc_idx].keywords.size();
+                int doc_len = corpus.docs[doc_idx].keyword_ids.size();
 
                 // Get term frequency: use tf_index if available, else assume tf=1 for legacy docs
                 double tf = 1.0;

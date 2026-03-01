@@ -1,0 +1,15 @@
+services:
+  sloan:
+    build:
+      context: ../../..
+      dockerfile: integrations/agent-zero/sloan/Dockerfile
+    container_name: sloan
+    ports:
+      - "50001:80"
+    volumes:
+      - ./sloan-data:/a0/usr
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
+    restart: unless-stopped
