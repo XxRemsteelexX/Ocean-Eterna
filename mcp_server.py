@@ -373,6 +373,8 @@ def oe_add_document(path: str) -> str:
             orig_entry["chunk_ids"] = chunk_ids
             try:
                 update_originals_catalog(corpus_dir, orig_entry)
+                # hot-reload catalog in C++ server so it picks up the new entry
+                _post("/reload-catalog", {})
             except Exception as e:
                 print(f"Warning: Could not update originals catalog: {e}")
 

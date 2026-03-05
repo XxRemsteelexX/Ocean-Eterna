@@ -2968,6 +2968,17 @@ void run_http_server() {
         res.set_content(result.dump(), "application/json");
     });
 
+    // POST /reload-catalog — hot-reload originals.json from disk
+    svr.Post("/reload-catalog", [](const httplib::Request&, httplib::Response& res) {
+        lock_guard<mutex> olock(originals_mutex);
+        load_originals_catalog();
+        json result;
+        result["success"] = true;
+        result["files"] = originals_catalog.size();
+        result["chunk_mappings"] = chunk_to_original.size();
+        res.set_content(result.dump(), "application/json");
+    });
+
     cout << "\n🌊 OceanEterna Chat Server running on http://localhost:" << HTTP_PORT << endl;
     cout << "Open ocean_chat.html in your browser to start chatting!\n" << endl;
 
