@@ -1154,7 +1154,9 @@ json add_file_to_index(const string& filename, const string& content) {
         chunks[i].source_file = safe_filename;
     }
 
-    // PHASE 3: Sequential writes (single-threaded for consistency)
+    // PHASE 3: Write to storage and update in-memory index
+    // v4.3 fix: single lock acquisition for entire batch (was per-chunk, caused lock contention)
+    // v4.3 fix: update stem index on ingestion (was only built at startup)
     DEBUG_ERR("Phase 3: Writing to storage...");
 
     // Get current storage offset
@@ -1174,11 +1176,26 @@ json add_file_to_index(const string& filename, const string& content) {
     int chunks_added = 0;
     uint64_t total_tokens = 0;  // v4.2: was int, overflows on multi-GB files
 
+    // Write all chunks to disk first (no lock needed for file I/O)
+    // Build manifest entries and track offsets
+    struct ChunkMeta {
+        uint64_t offset;
+        uint64_t length;
+        uint64_t token_start;
+        uint64_t token_end;
+    };
+    vector<ChunkMeta> chunk_metas;
+    chunk_metas.reserve(chunks.size());
+
     for (size_t ci = 0; ci < chunks.size(); ci++) {
         auto& chunk = chunks[ci];
 
-        // Write compressed data
+        // Write compressed data to storage
         storage_file.write(chunk.compressed.data(), chunk.compressed.size());
+
+        // Track offset/length for in-memory update
+        chunk_metas.push_back({current_offset, (uint64_t)chunk.compressed.size(),
+                               total_tokens, total_tokens + (uint64_t)(chunk.chunk_text.length() / 4)});
 
         // Create manifest entry
         json entry;
@@ -1186,7 +1203,6 @@ json add_file_to_index(const string& filename, const string& content) {
         entry["chunk_id"] = make_json_safe(chunk.chunk_id);
         entry["type"] = content_type;
         entry["source_file"] = safe_filename;
-        entry["index"] = (uint64_t)global_corpus.docs.size();
         entry["token_start"] = total_tokens;
         entry["token_end"] = total_tokens + (uint64_t)(chunk.chunk_text.length() / 4);
         entry["offset"] = (uint64_t)current_offset;
@@ -1206,41 +1222,6 @@ json add_file_to_index(const string& filename, const string& content) {
 
         manifest_file << entry.dump() << "\n";
 
-        // Add to in-memory corpus
-        // Thread safety: acquire exclusive lock for corpus mutation
-        {
-            unique_lock<shared_mutex> lock(corpus_mutex);
-
-            DocMeta doc;
-            doc.id = chunk.chunk_id;
-            // low-mem: don't store summary in RAM
-            // low-mem: intern keyword strings to IDs
-            for (const string& kw : chunk.keywords) {
-                doc.keyword_ids.push_back(intern_keyword(global_corpus, kw));
-            }
-            doc.offset = current_offset;
-            doc.length = chunk.compressed.size();
-            doc.start = total_tokens;
-            doc.end = total_tokens + (chunk.chunk_text.length() / 4);
-            // v4.2: Cross-references
-            doc.source_file = safe_filename;
-            if (ci > 0) doc.prev_chunk_id = chunks[ci - 1].chunk_id;
-            if (ci + 1 < chunks.size()) doc.next_chunk_id = chunks[ci + 1].chunk_id;
-            global_corpus.docs.push_back(doc);
-
-            // Update inverted index
-            uint32_t doc_idx = global_corpus.docs.size() - 1;
-            for (const string& kw : chunk.keywords) {
-                global_corpus.inverted_index[kw].push_back(doc_idx);
-            }
-            chunk_id_to_index[chunk.chunk_id] = doc_idx;
-
-            // Step 22: Update tf_index with term frequencies for this doc
-            for (const auto& [kw, freq] : chunk.tf_map) {
-                global_corpus.tf_index[kw][doc_idx] = freq;
-            }
-        }
-
         current_offset += chunk.compressed.size();
         total_tokens += chunk.chunk_text.length() / 4;
         chunks_added++;
@@ -1249,10 +1230,61 @@ json add_file_to_index(const string& filename, const string& content) {
             DEBUG_ERR("Written " << chunks_added << " / " << chunks.size() << " chunks");
         }
     }
-    DEBUG_ERR("Write complete: " << chunks_added << " chunks");
 
     storage_file.close();
     manifest_file.close();
+
+    // v4.3 fix: single lock acquisition for entire batch update
+    // previously locked per-chunk which caused severe contention at ~480+ docs
+    {
+        unique_lock<shared_mutex> lock(corpus_mutex);
+
+        for (size_t ci = 0; ci < chunks.size(); ci++) {
+            auto& chunk = chunks[ci];
+            auto& meta = chunk_metas[ci];
+
+            DocMeta doc;
+            doc.id = chunk.chunk_id;
+            for (const string& kw : chunk.keywords) {
+                doc.keyword_ids.push_back(intern_keyword(global_corpus, kw));
+            }
+            doc.offset = meta.offset;
+            doc.length = meta.length;
+            doc.start = meta.token_start;
+            doc.end = meta.token_end;
+            doc.source_file = safe_filename;
+            if (ci > 0) doc.prev_chunk_id = chunks[ci - 1].chunk_id;
+            if (ci + 1 < chunks.size()) doc.next_chunk_id = chunks[ci + 1].chunk_id;
+            global_corpus.docs.push_back(doc);
+
+            uint32_t doc_idx = global_corpus.docs.size() - 1;
+            for (const string& kw : chunk.keywords) {
+                global_corpus.inverted_index[kw].push_back(doc_idx);
+            }
+            chunk_id_to_index[chunk.chunk_id] = doc_idx;
+
+            for (const auto& [kw, freq] : chunk.tf_map) {
+                global_corpus.tf_index[kw][doc_idx] = freq;
+            }
+        }
+    }
+
+    // v4.3 fix: update stem index for newly ingested keywords
+    // previously only built at startup, so dynamically added docs were unsearchable
+    {
+        unique_lock<shared_mutex> wlock(g_stem_mutex);
+        for (const auto& chunk : chunks) {
+            for (const string& kw : chunk.keywords) {
+                if (g_stem_cache.find(kw) == g_stem_cache.end()) {
+                    string stemmed = porter::stem(kw);
+                    g_stem_cache[kw] = stemmed;
+                    g_stem_to_keywords[stemmed].push_back(kw);
+                }
+            }
+        }
+    }
+
+    DEBUG_ERR("Write complete: " << chunks_added << " chunks");
 
     // Update chapter guide (with defensive checks)
     {

@@ -8,6 +8,8 @@ services:
       - "50001:80"
     volumes:
       - ./sloan-data:/a0/usr
+      # target drive for file organizer (sloan read/write access)
+      - /home/yeblad:/mnt/target:rw
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file:

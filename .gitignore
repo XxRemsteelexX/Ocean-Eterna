@@ -64,5 +64,18 @@ integrations/agent-zero/sloan/sloan-data/uploads/
 integrations/agent-zero/sloan/sloan-data/workdir/*.tar.gz
 integrations/agent-zero/sloan/sloan-data/workdir/*.png
 
+# Secrets and SSH keys (NEVER commit)
+integrations/agent-zero/sloan/sloan-data/.ssh*
+integrations/agent-zero/sloan/sloan-data/knowledge/main/CHAINLINKS_MASTER_SECRETS.md
+integrations/agent-zero/sloan/sloan-data/workdir/.ssh_permanent/
+
+# Sloan workdir (generated/private data)
+integrations/agent-zero/sloan/sloan-data/workdir/
+integrations/agent-zero/sloan/sloan-data/skills/
+integrations/agent-zero/sloan/sloan-data/tools/
+
+# Build artifacts
+chat/guten_9m_build/
+
 # Corpus originals (user files)
 chat/corpus/originals/

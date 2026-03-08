@@ -1,0 +1,1241 @@
+{
+  "00_metadata": {
+    "timestamp": "2026-03-07 22:32:32",
+    "server_port": 9191,
+    "test_data_dir": "/home/yeblad/oe-benchmark-test/test_data",
+    "note": "LLM disabled (timeout=2s, retries=0). search_time_ms = pure BM25 latency.",
+    "cpu": "Model name:                           Intel(R) Core(TM) i9-14900KS",
+    "system_memory": "Mem:            94Gi        14Gi        66Gi       1.7Gi        12Gi        71Gi"
+  },
+  "01_startup": {
+    "health_check": "PASS",
+    "initial_stats": {
+      "avg_llm_ms": 0.0,
+      "avg_search_ms": 0.0,
+      "chunks_loaded": 0,
+      "cpu_usage": 9.7,
+      "creature_tier": "Seahorse",
+      "db_size_mb": 0,
+      "process_rss_mb": 10,
+      "ram_total_gb": 94.0,
+      "ram_usage": 29.3,
+      "ram_used_gb": 27.6,
+      "stem_cache_size": 0,
+      "stem_reverse_size": 0,
+      "tentacles": 3,
+      "total_queries": 0,
+      "total_tokens": 0,
+      "unique_keywords": 0
+    }
+  },
+  "10_api_completeness": {
+    "GET /health": {
+      "status": 200,
+      "exists": true
+    },
+    "GET /stats": {
+      "status": 200,
+      "exists": true
+    },
+    "GET /catalog": {
+      "status": 200,
+      "exists": true
+    },
+    "GET /guide": {
+      "status": 200,
+      "exists": true
+    },
+    "GET /originals": {
+      "status": 200,
+      "exists": true
+    },
+    "POST /chat": {
+      "status": 200,
+      "exists": true
+    },
+    "POST /chat/stream": {
+      "status": 200,
+      "exists": true
+    },
+    "POST /add-file": {
+      "status": 200,
+      "exists": true
+    },
+    "POST /add-file-path": {
+      "status": 400,
+      "exists": true
+    },
+    "POST /sources": {
+      "status": 200,
+      "exists": true
+    },
+    "POST /tell-me-more": {
+      "status": 404,
+      "exists": true
+    },
+    "POST /clear-database": {
+      "status": 200,
+      "exists": true
+    },
+    "POST /reload-catalog": {
+      "status": 200,
+      "exists": true
+    },
+    "GET /chunk/{id}": {
+      "status": 404,
+      "exists": true
+    },
+    "endpoints_available": "14/14"
+  },
+  "02_ingestion_small": {
+    "doc_count": 100,
+    "total_bytes": 311563,
+    "total_mb": 0.3,
+    "memory_before_mb": 12.6,
+    "total_ingest_time_sec": 0.46,
+    "docs_per_second": 219.1,
+    "mb_per_second": 0.65,
+    "total_chunks_created": 217,
+    "errors": 0,
+    "memory_after_mb": 23.9,
+    "memory_delta_mb": 11.2,
+    "ingest_latency_p50_ms": 4.26,
+    "ingest_latency_p95_ms": 8.04,
+    "ingest_latency_p99_ms": 9.7,
+    "ingest_latency_max_ms": 9.7,
+    "ingest_latency_min_ms": 1.02,
+    "server_stats_after": {
+      "avg_llm_ms": 1.409102,
+      "avg_search_ms": 0.029882,
+      "chunks_loaded": 218,
+      "cpu_usage": 10.6,
+      "creature_tier": "Starfish",
+      "db_size_mb": 0,
+      "process_rss_mb": 23,
+      "ram_total_gb": 94.0,
+      "ram_usage": 29.3,
+      "ram_used_gb": 27.6,
+      "stem_cache_size": 0,
+      "stem_reverse_size": 0,
+      "tentacles": 8,
+      "total_queries": 2,
+      "total_tokens": 2,
+      "unique_keywords": 936
+    }
+  },
+  "03_search_latency_small_100docs": {
+    "total_queries": 102,
+    "queries_returning_results": 26,
+    "bm25_p50_ms": 0.065,
+    "bm25_p95_ms": 0.126,
+    "bm25_p99_ms": 0.144,
+    "bm25_mean_ms": 0.057,
+    "bm25_min_ms": 0.005,
+    "bm25_max_ms": 0.147,
+    "bm25_stdev_ms": 0.036,
+    "e2e_p50_ms": 4.5,
+    "e2e_mean_ms": 4.3,
+    "e2e_max_ms": 8.1,
+    "per_query_detail": {
+      "neural": {
+        "bm25_avg_ms": 0.07,
+        "bm25_min_ms": 0.056,
+        "e2e_avg_ms": 6.1,
+        "chunks_found": 8
+      },
+      "networks": {
+        "bm25_avg_ms": 0.07,
+        "bm25_min_ms": 0.059,
+        "e2e_avg_ms": 5.0,
+        "chunks_found": 8
+      },
+      "quantum": {
+        "bm25_avg_ms": 0.073,
+        "bm25_min_ms": 0.066,
+        "e2e_avg_ms": 7.3,
+        "chunks_found": 8
+      },
+      "cooking": {
+        "bm25_avg_ms": 0.068,
+        "bm25_min_ms": 0.067,
+        "e2e_avg_ms": 6.9,
+        "chunks_found": 8
+      },
+      "philosophy": {
+        "bm25_avg_ms": 0.069,
+        "bm25_min_ms": 0.062,
+        "e2e_avg_ms": 6.3,
+        "chunks_found": 8
+      },
+      "blockchain": {
+        "bm25_avg_ms": 0.069,
+        "bm25_min_ms": 0.067,
+        "e2e_avg_ms": 7.1,
+        "chunks_found": 8
+      },
+      "evolution": {
+        "bm25_avg_ms": 0.066,
+        "bm25_min_ms": 0.064,
+        "e2e_avg_ms": 6.3,
+        "chunks_found": 8
+      },
+      "printing": {
+        "bm25_avg_ms": 0.05,
+        "bm25_min_ms": 0.041,
+        "e2e_avg_ms": 4.8,
+        "chunks_found": 8
+      },
+      "fermentation": {
+        "bm25_avg_ms": 0.075,
+        "bm25_min_ms": 0.061,
+        "e2e_avg_ms": 6.8,
+        "chunks_found": 8
+      },
+      "microservices": {
+        "bm25_avg_ms": 0.064,
+        "bm25_min_ms": 0.053,
+        "e2e_avg_ms": 6.1,
+        "chunks_found": 8
+      },
+      "machine learning gradient descent": {
+        "bm25_avg_ms": 0.11,
+        "bm25_min_ms": 0.096,
+        "e2e_avg_ms": 5.5,
+        "chunks_found": 8
+      },
+      "database indexing performance": {
+        "bm25_avg_ms": 0.091,
+        "bm25_min_ms": 0.087,
+        "e2e_avg_ms": 6.7,
+        "chunks_found": 8
+      },
+      "quantum mechanics wave particle": {
+        "bm25_avg_ms": 0.13,
+        "bm25_min_ms": 0.111,
+        "e2e_avg_ms": 7.2,
+        "chunks_found": 8
+      },
+      "natural language processing": {
+        "bm25_avg_ms": 0.139,
+        "bm25_min_ms": 0.126,
+        "e2e_avg_ms": 6.0,
+        "chunks_found": 8
+      },
+      "reinforcement learning reward": {
+        "bm25_avg_ms": 0.095,
+        "bm25_min_ms": 0.083,
+        "e2e_avg_ms": 5.4,
+        "chunks_found": 8
+      },
+      "supply chain management": {
+        "bm25_avg_ms": 0.09,
+        "bm25_min_ms": 0.076,
+        "e2e_avg_ms": 5.3,
+        "chunks_found": 8
+      },
+      "french revolution democracy": {
+        "bm25_avg_ms": 0.076,
+        "bm25_min_ms": 0.065,
+        "e2e_avg_ms": 6.1,
+        "chunks_found": 8
+      },
+      "genetic inheritance DNA": {
+        "bm25_avg_ms": 0.057,
+        "bm25_min_ms": 0.046,
+        "e2e_avg_ms": 3.5,
+        "chunks_found": 8
+      },
+      "container orchestration kubernetes": {
+        "bm25_avg_ms": 0.08,
+        "bm25_min_ms": 0.078,
+        "e2e_avg_ms": 6.3,
+        "chunks_found": 8
+      },
+      "zero trust security": {
+        "bm25_avg_ms": 0.073,
+        "bm25_min_ms": 0.066,
+        "e2e_avg_ms": 5.7,
+        "chunks_found": 8
+      },
+      "how do neural networks learn": {
+        "bm25_avg_ms": 0.062,
+        "bm25_min_ms": 0.036,
+        "e2e_avg_ms": 2.9,
+        "chunks_found": 8
+      },
+      "what is quantum computing": {
+        "bm25_avg_ms": 0.025,
+        "bm25_min_ms": 0.023,
+        "e2e_avg_ms": 1.4,
+        "chunks_found": 8
+      },
+      "how does fermentation work": {
+        "bm25_avg_ms": 0.014,
+        "bm25_min_ms": 0.013,
+        "e2e_avg_ms": 1.1,
+        "chunks_found": 8
+      },
+      "what causes earthquakes": {
+        "bm25_avg_ms": 0.012,
+        "bm25_min_ms": 0.011,
+        "e2e_avg_ms": 1.1,
+        "chunks_found": 8
+      },
+      "how does evolution work": {
+        "bm25_avg_ms": 0.012,
+        "bm25_min_ms": 0.01,
+        "e2e_avg_ms": 0.9,
+        "chunks_found": 8
+      },
+      "what is blockchain technology": {
+        "bm25_avg_ms": 0.047,
+        "bm25_min_ms": 0.015,
+        "e2e_avg_ms": 1.2,
+        "chunks_found": 8
+      },
+      "a": {
+        "bm25_avg_ms": 0.006,
+        "bm25_min_ms": 0.005,
+        "e2e_avg_ms": 1.0,
+        "chunks_found": 0
+      },
+      "the": {
+        "bm25_avg_ms": 0.007,
+        "bm25_min_ms": 0.006,
+        "e2e_avg_ms": 0.9,
+        "chunks_found": 0
+      },
+      "is": {
+        "bm25_avg_ms": 0.009,
+        "bm25_min_ms": 0.007,
+        "e2e_avg_ms": 1.3,
+        "chunks_found": 0
+      },
+      "null": {
+        "bm25_avg_ms": 0.024,
+        "bm25_min_ms": 0.021,
+        "e2e_avg_ms": 2.6,
+        "chunks_found": 0
+      },
+      "undefined": {
+        "bm25_avg_ms": 0.025,
+        "bm25_min_ms": 0.019,
+        "e2e_avg_ms": 2.5,
+        "chunks_found": 0
+      },
+      "NaN": {
+        "bm25_avg_ms": 0.018,
+        "bm25_min_ms": 0.015,
+        "e2e_avg_ms": 2.0,
+        "chunks_found": 0
+      },
+      "true": {
+        "bm25_avg_ms": 0.024,
+        "bm25_min_ms": 0.019,
+        "e2e_avg_ms": 3.4,
+        "chunks_found": 0
+      },
+      "false": {
+        "bm25_avg_ms": 0.037,
+        "bm25_min_ms": 0.034,
+        "e2e_avg_ms": 4.4,
+        "chunks_found": 0
+      }
+    }
+  },
+  "04_search_relevance_small_100docs": {
+    "accuracy_pct": 0.0,
+    "correct": 0,
+    "total": 16,
+    "details": [
+      {
+        "query": "gradient descent optimization",
+        "expected": "machine_learning",
+        "found": false,
+        "sources": [
+          "doc000000_DOC_3",
+          "doc000064_DOC_139",
+          "doc000008_DOC_20"
+        ],
+        "search_ms": 0.055
+      },
+      {
+        "query": "neural network layers activation",
+        "expected": "machine_learning",
+        "found": false,
+        "sources": [
+          "doc000088_DOC_194",
+          "doc000032_DOC_67",
+          "doc000000_DOC_2"
+        ],
+        "search_ms": 0.068
+      },
+      {
+        "query": "kubernetes container deployment",
+        "expected": "software_engineering",
+        "found": false,
+        "sources": [
+          "doc000009_DOC_22",
+          "doc000033_DOC_69",
+          "doc000073_DOC_157"
+        ],
+        "search_ms": 0.041
+      },
+      {
+        "query": "database indexing query",
+        "expected": "software_engineering",
+        "found": false,
+        "sources": [
+          "doc000001_DOC_5",
+          "doc000049_DOC_103",
+          "doc000033_DOC_70"
+        ],
+        "search_ms": 0.042
+      },
+      {
+        "query": "French Revolution democracy monarchy",
+        "expected": "history",
+        "found": false,
+        "sources": [
+          "doc000090_DOC_199",
+          "doc000050_DOC_107",
+          "doc000034_DOC_72"
+        ],
+        "search_ms": 0.065
+      },
+      {
+        "query": "Roman Republic Empire Augustus",
+        "expected": "history",
+        "found": false,
+        "sources": [
+          "doc000090_DOC_199",
+          "doc000058_DOC_123",
+          "doc000058_DOC_121"
+        ],
+        "search_ms": 0.066
+      },
+      {
+        "query": "quantum mechanics particles waves",
+        "expected": "science",
+        "found": false,
+        "sources": [
+          "doc000035_DOC_73",
+          "doc000019_DOC_41",
+          "doc000059_DOC_124"
+        ],
+        "search_ms": 0.101
+      },
+      {
+        "query": "DNA double helix genetic",
+        "expected": "science",
+        "found": false,
+        "sources": [
+          "doc000091_DOC_200",
+          "doc000043_DOC_91",
+          "doc000011_DOC_28"
+        ],
+        "search_ms": 0.066
+      },
+      {
+        "query": "venture capital startup equity",
+        "expected": "business",
+        "found": false,
+        "sources": [
+          "doc000052_DOC_111",
+          "doc000076_DOC_162",
+          "doc000004_DOC_14"
+        ],
+        "search_ms": 0.087
+      },
+      {
+        "query": "supply chain manufacturing",
+        "expected": "business",
+        "found": false,
+        "sources": [
+          "doc000044_DOC_94",
+          "doc000004_DOC_14",
+          "doc000076_DOC_162"
+        ],
+        "search_ms": 0.091
+      },
+      {
+        "query": "Maillard reaction cooking flavor",
+        "expected": "cooking",
+        "found": false,
+        "sources": [
+          "doc000053_DOC_113",
+          "doc000045_DOC_95",
+          "doc000085_DOC_186"
+        ],
+        "search_ms": 0.094
+      },
+      {
+        "query": "fermentation bread cheese",
+        "expected": "cooking",
+        "found": false,
+        "sources": [
+          "doc000005_DOC_15",
+          "doc000021_DOC_44",
+          "doc000045_DOC_95"
+        ],
+        "search_ms": 0.067
+      },
+      {
+        "query": "existentialism individual existence",
+        "expected": "philosophy",
+        "found": false,
+        "sources": [
+          "doc000062_DOC_132",
+          "doc000014_DOC_32",
+          "doc000086_DOC_188"
+        ],
+        "search_ms": 0.071
+      },
+      {
+        "query": "utilitarianism consequences happiness",
+        "expected": "philosophy",
+        "found": false,
+        "sources": [
+          "doc000062_DOC_130",
+          "doc000062_DOC_132",
+          "doc000086_DOC_188"
+        ],
+        "search_ms": 0.108
+      },
+      {
+        "query": "blockchain distributed ledger",
+        "expected": "technology",
+        "found": false,
+        "sources": [
+          "doc000023_DOC_50",
+          "doc000031_DOC_66",
+          "doc000039_DOC_83"
+        ],
+        "search_ms": 0.073
+      },
+      {
+        "query": "edge computing IoT latency",
+        "expected": "technology",
+        "found": false,
+        "sources": [
+          "doc000039_DOC_83",
+          "doc000007_DOC_18",
+          "doc000071_DOC_151"
+        ],
+        "search_ms": 0.124
+      }
+    ]
+  },
+  "11_chunk_retrieval_small_100docs": {
+    "chunk_ids_from_search": 8,
+    "chunk_doc000024_DOC_52": {
+      "status": 200,
+      "has_content": true,
+      "has_source_file": true,
+      "latency_ms": 2.8
+    },
+    "chunk_doc000088_DOC_194": {
+      "status": 200,
+      "has_content": true,
+      "has_source_file": true,
+      "latency_ms": 2.3
+    },
+    "chunk_doc000000_DOC_2": {
+      "status": 200,
+      "has_content": true,
+      "has_source_file": true,
+      "latency_ms": 2.3
+    },
+    "chunk_doc000032_DOC_67": {
+      "status": 200,
+      "has_content": true,
+      "has_source_file": true,
+      "latency_ms": 2.2
+    },
+    "chunk_doc000056_DOC_118": {
+      "status": 200,
+      "has_content": true,
+      "has_source_file": true,
+      "latency_ms": 2.1
+    },
+    "context_window_1": {
+      "adjacent_count": 1,
+      "latency_ms": 1.9
+    },
+    "context_window_2": {
+      "adjacent_count": 1,
+      "latency_ms": 1.6
+    },
+    "context_window_3": {
+      "adjacent_count": 1,
+      "latency_ms": 2.1
+    },
+    "avg_retrieval_ms": 2.35
+  },
+  "12_catalog_small_100docs": {
+    "status": 200,
+    "latency_ms": 6.0,
+    "response_keys": [
+      "avgdl",
+      "chunks",
+      "page",
+      "page_size",
+      "source_files",
+      "total_chunks",
+      "total_tokens",
+      "types"
+    ],
+    "total_items": 8
+  },
+  "06_edge_cases": {
+    "tests_run": 18,
+    "tests_handled_gracefully": 18,
+    "details": {
+      "empty_question": {
+        "status": 200,
+        "handled": true,
+        "latency_ms": 5.4
+      },
+      "10kb_query": {
+        "status": 200,
+        "handled": true,
+        "latency_ms": 8.8
+      },
+      "unicode_chinese": {
+        "status": 200,
+        "latency_ms": 3.5,
+        "handled": true
+      },
+      "unicode_arabic": {
+        "status": 200,
+        "latency_ms": 3.5,
+        "handled": true
+      },
+      "unicode_emoji": {
+        "status": 200,
+        "latency_ms": 3.3,
+        "handled": true
+      },
+      "unicode_mixed": {
+        "status": 200,
+        "latency_ms": 5.6,
+        "handled": true
+      },
+      "special_html_tags": {
+        "status": 200,
+        "latency_ms": 5.5,
+        "handled": true
+      },
+      "special_sql_inject": {
+        "status": 200,
+        "latency_ms": 4.6,
+        "handled": true
+      },
+      "special_path_traversal": {
+        "status": 200,
+        "latency_ms": 4.7,
+        "handled": true
+      },
+      "special_newlines": {
+        "status": 200,
+        "latency_ms": 7.2,
+        "handled": true
+      },
+      "special_xss": {
+        "status": 200,
+        "latency_ms": 4.8,
+        "handled": true
+      },
+      "malformed_json": {
+        "status": 500,
+        "handled": true
+      },
+      "missing_question_field": {
+        "status": 400,
+        "correct_400": true
+      },
+      "404_handling": {
+        "status": 404,
+        "correct": true
+      },
+      "invalid_chunk_id": {
+        "status": 404,
+        "correct": true
+      },
+      "path_traversal_ingest": {
+        "status": 403,
+        "blocked": true
+      },
+      "empty_content_ingest": {
+        "status": 200,
+        "handled": true
+      },
+      "huge_filename_ingest": {
+        "status": 200,
+        "handled": true
+      }
+    }
+  },
+  "02_ingestion_medium": {
+    "doc_count": 300,
+    "total_bytes": 915529,
+    "total_mb": 0.87,
+    "memory_before_mb": 10.3,
+    "total_ingest_time_sec": 1.2,
+    "docs_per_second": 249.4,
+    "mb_per_second": 0.73,
+    "total_chunks_created": 641,
+    "errors": 0,
+    "memory_after_mb": 24.3,
+    "memory_delta_mb": 14.0,
+    "ingest_latency_p50_ms": 3.73,
+    "ingest_latency_p95_ms": 6.87,
+    "ingest_latency_p99_ms": 8.47,
+    "ingest_latency_max_ms": 8.91,
+    "ingest_latency_min_ms": 0.81,
+    "server_stats_after": {
+      "avg_llm_ms": 0.0,
+      "avg_search_ms": 0.0,
+      "chunks_loaded": 641,
+      "cpu_usage": 9.7,
+      "creature_tier": "Starfish",
+      "db_size_mb": 0,
+      "process_rss_mb": 24,
+      "ram_total_gb": 94.0,
+      "ram_usage": 29.3,
+      "ram_used_gb": 27.5,
+      "stem_cache_size": 0,
+      "stem_reverse_size": 0,
+      "tentacles": 8,
+      "total_queries": 0,
+      "total_tokens": 0,
+      "unique_keywords": 1136
+    }
+  },
+  "03_search_latency_medium_300docs": {
+    "total_queries": 102,
+    "queries_returning_results": 26,
+    "bm25_p50_ms": 0.019,
+    "bm25_p95_ms": 0.047,
+    "bm25_p99_ms": 0.06,
+    "bm25_mean_ms": 0.022,
+    "bm25_min_ms": 0.005,
+    "bm25_max_ms": 0.08,
+    "bm25_stdev_ms": 0.014,
+    "e2e_p50_ms": 1.2,
+    "e2e_mean_ms": 1.2,
+    "e2e_max_ms": 1.9,
+    "per_query_detail": {
+      "neural": {
+        "bm25_avg_ms": 0.019,
+        "bm25_min_ms": 0.017,
+        "e2e_avg_ms": 1.8,
+        "chunks_found": 8
+      },
+      "networks": {
+        "bm25_avg_ms": 0.037,
+        "bm25_min_ms": 0.029,
+        "e2e_avg_ms": 1.2,
+        "chunks_found": 8
+      },
+      "quantum": {
+        "bm25_avg_ms": 0.019,
+        "bm25_min_ms": 0.016,
+        "e2e_avg_ms": 1.5,
+        "chunks_found": 8
+      },
+      "cooking": {
+        "bm25_avg_ms": 0.02,
+        "bm25_min_ms": 0.018,
+        "e2e_avg_ms": 1.5,
+        "chunks_found": 8
+      },
+      "philosophy": {
+        "bm25_avg_ms": 0.018,
+        "bm25_min_ms": 0.014,
+        "e2e_avg_ms": 1.3,
+        "chunks_found": 8
+      },
+      "blockchain": {
+        "bm25_avg_ms": 0.014,
+        "bm25_min_ms": 0.012,
+        "e2e_avg_ms": 1.3,
+        "chunks_found": 8
+      },
+      "evolution": {
+        "bm25_avg_ms": 0.014,
+        "bm25_min_ms": 0.013,
+        "e2e_avg_ms": 1.1,
+        "chunks_found": 8
+      },
+      "printing": {
+        "bm25_avg_ms": 0.016,
+        "bm25_min_ms": 0.014,
+        "e2e_avg_ms": 1.5,
+        "chunks_found": 8
+      },
+      "fermentation": {
+        "bm25_avg_ms": 0.021,
+        "bm25_min_ms": 0.019,
+        "e2e_avg_ms": 1.5,
+        "chunks_found": 8
+      },
+      "microservices": {
+        "bm25_avg_ms": 0.017,
+        "bm25_min_ms": 0.014,
+        "e2e_avg_ms": 1.3,
+        "chunks_found": 8
+      },
+      "machine learning gradient descent": {
+        "bm25_avg_ms": 0.038,
+        "bm25_min_ms": 0.032,
+        "e2e_avg_ms": 1.2,
+        "chunks_found": 8
+      },
+      "database indexing performance": {
+        "bm25_avg_ms": 0.021,
+        "bm25_min_ms": 0.018,
+        "e2e_avg_ms": 1.1,
+        "chunks_found": 8
+      },
+      "quantum mechanics wave particle": {
+        "bm25_avg_ms": 0.042,
+        "bm25_min_ms": 0.029,
+        "e2e_avg_ms": 1.2,
+        "chunks_found": 8
+      },
+      "natural language processing": {
+        "bm25_avg_ms": 0.044,
+        "bm25_min_ms": 0.037,
+        "e2e_avg_ms": 1.3,
+        "chunks_found": 8
+      },
+      "reinforcement learning reward": {
+        "bm25_avg_ms": 0.033,
+        "bm25_min_ms": 0.028,
+        "e2e_avg_ms": 1.3,
+        "chunks_found": 8
+      },
+      "supply chain management": {
+        "bm25_avg_ms": 0.027,
+        "bm25_min_ms": 0.023,
+        "e2e_avg_ms": 0.9,
+        "chunks_found": 8
+      },
+      "french revolution democracy": {
+        "bm25_avg_ms": 0.04,
+        "bm25_min_ms": 0.017,
+        "e2e_avg_ms": 1.1,
+        "chunks_found": 8
+      },
+      "genetic inheritance DNA": {
+        "bm25_avg_ms": 0.022,
+        "bm25_min_ms": 0.021,
+        "e2e_avg_ms": 1.2,
+        "chunks_found": 8
+      },
+      "container orchestration kubernetes": {
+        "bm25_avg_ms": 0.019,
+        "bm25_min_ms": 0.017,
+        "e2e_avg_ms": 1.3,
+        "chunks_found": 8
+      },
+      "zero trust security": {
+        "bm25_avg_ms": 0.023,
+        "bm25_min_ms": 0.018,
+        "e2e_avg_ms": 1.4,
+        "chunks_found": 8
+      },
+      "how do neural networks learn": {
+        "bm25_avg_ms": 0.042,
+        "bm25_min_ms": 0.032,
+        "e2e_avg_ms": 1.2,
+        "chunks_found": 8
+      },
+      "what is quantum computing": {
+        "bm25_avg_ms": 0.039,
+        "bm25_min_ms": 0.032,
+        "e2e_avg_ms": 1.2,
+        "chunks_found": 8
+      },
+      "how does fermentation work": {
+        "bm25_avg_ms": 0.019,
+        "bm25_min_ms": 0.016,
+        "e2e_avg_ms": 0.9,
+        "chunks_found": 8
+      },
+      "what causes earthquakes": {
+        "bm25_avg_ms": 0.025,
+        "bm25_min_ms": 0.018,
+        "e2e_avg_ms": 1.2,
+        "chunks_found": 8
+      },
+      "how does evolution work": {
+        "bm25_avg_ms": 0.022,
+        "bm25_min_ms": 0.018,
+        "e2e_avg_ms": 1.2,
+        "chunks_found": 8
+      },
+      "what is blockchain technology": {
+        "bm25_avg_ms": 0.038,
+        "bm25_min_ms": 0.029,
+        "e2e_avg_ms": 1.2,
+        "chunks_found": 8
+      },
+      "a": {
+        "bm25_avg_ms": 0.006,
+        "bm25_min_ms": 0.006,
+        "e2e_avg_ms": 1.1,
+        "chunks_found": 0
+      },
+      "the": {
+        "bm25_avg_ms": 0.014,
+        "bm25_min_ms": 0.005,
+        "e2e_avg_ms": 0.8,
+        "chunks_found": 0
+      },
+      "is": {
+        "bm25_avg_ms": 0.006,
+        "bm25_min_ms": 0.005,
+        "e2e_avg_ms": 1.0,
+        "chunks_found": 0
+      },
+      "null": {
+        "bm25_avg_ms": 0.008,
+        "bm25_min_ms": 0.006,
+        "e2e_avg_ms": 1.0,
+        "chunks_found": 0
+      },
+      "undefined": {
+        "bm25_avg_ms": 0.008,
+        "bm25_min_ms": 0.008,
+        "e2e_avg_ms": 0.9,
+        "chunks_found": 0
+      },
+      "NaN": {
+        "bm25_avg_ms": 0.007,
+        "bm25_min_ms": 0.006,
+        "e2e_avg_ms": 0.9,
+        "chunks_found": 0
+      },
+      "true": {
+        "bm25_avg_ms": 0.007,
+        "bm25_min_ms": 0.006,
+        "e2e_avg_ms": 1.0,
+        "chunks_found": 0
+      },
+      "false": {
+        "bm25_avg_ms": 0.008,
+        "bm25_min_ms": 0.007,
+        "e2e_avg_ms": 0.9,
+        "chunks_found": 0
+      }
+    }
+  },
+  "04_search_relevance_medium_300docs": {
+    "accuracy_pct": 0.0,
+    "correct": 0,
+    "total": 16,
+    "details": [
+      {
+        "query": "gradient descent optimization",
+        "expected": "machine_learning",
+        "found": false,
+        "sources": [
+          "doc000192_DOC_426",
+          "doc000040_DOC_89",
+          "doc000008_DOC_18"
+        ],
+        "search_ms": 0.036
+      },
+      {
+        "query": "neural network layers activation",
+        "expected": "machine_learning",
+        "found": false,
+        "sources": [
+          "doc000040_DOC_89",
+          "doc000224_DOC_487",
+          "doc000112_DOC_251"
+        ],
+        "search_ms": 0.068
+      },
+      {
+        "query": "kubernetes container deployment",
+        "expected": "software_engineering",
+        "found": false,
+        "sources": [
+          "doc000249_DOC_536",
+          "doc000105_DOC_235",
+          "doc000257_DOC_553"
+        ],
+        "search_ms": 0.027
+      },
+      {
+        "query": "database indexing query",
+        "expected": "software_engineering",
+        "found": false,
+        "sources": [
+          "doc000297_DOC_635",
+          "doc000017_DOC_35",
+          "doc000105_DOC_235"
+        ],
+        "search_ms": 0.026
+      },
+      {
+        "query": "French Revolution democracy monarchy",
+        "expected": "history",
+        "found": false,
+        "sources": [
+          "doc000282_DOC_598",
+          "doc000266_DOC_567",
+          "doc000050_DOC_112"
+        ],
+        "search_ms": 0.022
+      },
+      {
+        "query": "Roman Republic Empire Augustus",
+        "expected": "history",
+        "found": false,
+        "sources": [
+          "doc000298_DOC_637",
+          "doc000106_DOC_238",
+          "doc000266_DOC_567"
+        ],
+        "search_ms": 0.02
+      },
+      {
+        "query": "quantum mechanics particles waves",
+        "expected": "science",
+        "found": false,
+        "sources": [
+          "doc000019_DOC_39",
+          "doc000163_DOC_371",
+          "doc000091_DOC_203"
+        ],
+        "search_ms": 0.054
+      },
+      {
+        "query": "DNA double helix genetic",
+        "expected": "science",
+        "found": false,
+        "sources": [
+          "doc000059_DOC_132",
+          "doc000019_DOC_39",
+          "doc000155_DOC_350"
+        ],
+        "search_ms": 0.025
+      },
+      {
+        "query": "venture capital startup equity",
+        "expected": "business",
+        "found": false,
+        "sources": [
+          "doc000148_DOC_331",
+          "doc000076_DOC_173",
+          "doc000164_DOC_373"
+        ],
+        "search_ms": 0.024
+      },
+      {
+        "query": "supply chain manufacturing",
+        "expected": "business",
+        "found": false,
+        "sources": [
+          "doc000260_DOC_558",
+          "doc000004_DOC_10",
+          "doc000148_DOC_332"
+        ],
+        "search_ms": 0.019
+      },
+      {
+        "query": "Maillard reaction cooking flavor",
+        "expected": "cooking",
+        "found": false,
+        "sources": [
+          "doc000285_DOC_606",
+          "doc000197_DOC_437",
+          "doc000053_DOC_121"
+        ],
+        "search_ms": 0.025
+      },
+      {
+        "query": "fermentation bread cheese",
+        "expected": "cooking",
+        "found": false,
+        "sources": [
+          "doc000293_DOC_624",
+          "doc000245_DOC_528",
+          "doc000005_DOC_13"
+        ],
+        "search_ms": 0.027
+      },
+      {
+        "query": "existentialism individual existence",
+        "expected": "philosophy",
+        "found": false,
+        "sources": [
+          "doc000054_DOC_123",
+          "doc000014_DOC_28",
+          "doc000014_DOC_27"
+        ],
+        "search_ms": 0.021
+      },
+      {
+        "query": "utilitarianism consequences happiness",
+        "expected": "philosophy",
+        "found": false,
+        "sources": [
+          "doc000262_DOC_560",
+          "doc000062_DOC_139",
+          "doc000222_DOC_483"
+        ],
+        "search_ms": 0.019
+      },
+      {
+        "query": "blockchain distributed ledger",
+        "expected": "technology",
+        "found": false,
+        "sources": [
+          "doc000207_DOC_457",
+          "doc000031_DOC_66",
+          "doc000135_DOC_301"
+        ],
+        "search_ms": 0.031
+      },
+      {
+        "query": "edge computing IoT latency",
+        "expected": "technology",
+        "found": false,
+        "sources": [
+          "doc000039_DOC_86",
+          "doc000047_DOC_106",
+          "doc000079_DOC_180"
+        ],
+        "search_ms": 0.04
+      }
+    ]
+  },
+  "05_concurrent_medium_300docs": {
+    "total_queries": 50,
+    "successful": 50,
+    "errors": 0,
+    "error_rate_pct": 0.0,
+    "wall_clock_sec": 0.04,
+    "bm25_p50_ms": 0.034,
+    "bm25_p95_ms": 0.053,
+    "bm25_p99_ms": 0.374,
+    "bm25_mean_ms": 0.038,
+    "bm25_max_ms": 0.374,
+    "throughput_qps": 1351.0,
+    "e2e_p50_ms": 3.1,
+    "e2e_mean_ms": 3.0
+  },
+  "07_large_doc_ingest": {
+    "1KB_status": 200,
+    "1KB_latency_ms": 7.0,
+    "1KB_actual_bytes": 1603,
+    "1KB_mem_delta_mb": 0.0,
+    "1KB_throughput_mb_s": 0.22,
+    "1KB_chunks_created": 1,
+    "1KB_tokens_added": 400,
+    "10KB_status": 200,
+    "10KB_latency_ms": 4.5,
+    "10KB_actual_bytes": 10261,
+    "10KB_mem_delta_mb": 0.25,
+    "10KB_throughput_mb_s": 2.16,
+    "10KB_chunks_created": 7,
+    "10KB_tokens_added": 2562,
+    "100KB_status": 200,
+    "100KB_latency_ms": 4.9,
+    "100KB_actual_bytes": 103128,
+    "100KB_mem_delta_mb": 0.75,
+    "100KB_throughput_mb_s": 20.25,
+    "100KB_chunks_created": 66,
+    "100KB_tokens_added": 25749,
+    "500KB_status": 200,
+    "500KB_latency_ms": 11.7,
+    "500KB_actual_bytes": 512368,
+    "500KB_mem_delta_mb": 2.83,
+    "500KB_throughput_mb_s": 41.81,
+    "500KB_chunks_created": 326,
+    "500KB_tokens_added": 127929,
+    "1MB_status": 200,
+    "1MB_latency_ms": 20.9,
+    "1MB_actual_bytes": 1049100,
+    "1MB_mem_delta_mb": 5.72,
+    "1MB_throughput_mb_s": 47.76,
+    "1MB_chunks_created": 667,
+    "1MB_tokens_added": 261941,
+    "5MB_status": 200,
+    "5MB_latency_ms": 106.5,
+    "5MB_actual_bytes": 5243023,
+    "5MB_mem_delta_mb": 28.94,
+    "5MB_throughput_mb_s": 46.94,
+    "5MB_chunks_created": 3331,
+    "5MB_tokens_added": 1309090
+  },
+  "09_sustained_load": {
+    "duration_sec": 22.3,
+    "total_queries": 1196,
+    "errors": 6,
+    "avg_qps": 53.7,
+    "bm25_p50_ms": 0.067,
+    "bm25_p95_ms": 0.23,
+    "bm25_p99_ms": 0.307,
+    "bm25_mean_ms": 0.093,
+    "bm25_max_ms": 0.372,
+    "first_quarter_bm25_avg_ms": 0.079,
+    "last_quarter_bm25_avg_ms": 0.094,
+    "latency_drift_pct": 18.5,
+    "stable": true,
+    "e2e_p50_ms": 3.8,
+    "e2e_mean_ms": 4.8
+  },
+  "13_ingestion_stress": {
+    "docs_attempted": 600,
+    "docs_ingested": 482,
+    "docs_timed_out": 11,
+    "docs_failed": 0,
+    "first_failure_at_doc": 482,
+    "server_unresponsive_at_doc": null,
+    "avg_ingest_ms": 3.0,
+    "p95_ingest_ms": 6.0,
+    "first_20_avg_ms": 2.8,
+    "last_20_avg_ms": 1.3,
+    "degradation_factor": 0.45,
+    "final_memory_mb": 26.5
+  },
+  "08_server_stats": {
+    "stats": {
+      "avg_llm_ms": 0.0,
+      "avg_search_ms": 0.0,
+      "chunks_loaded": 1034,
+      "cpu_usage": 9.7,
+      "creature_tier": "Jellyfish",
+      "db_size_mb": 0,
+      "process_rss_mb": 26,
+      "ram_total_gb": 94.0,
+      "ram_usage": 31.0,
+      "ram_used_gb": 29.1,
+      "stem_cache_size": 0,
+      "stem_reverse_size": 0,
+      "tentacles": 10,
+      "total_queries": 0,
+      "total_tokens": 0,
+      "unique_keywords": 1318
+    },
+    "process_memory_mb": 26.5,
+    "endpoint_/health": {
+      "status": 200,
+      "responds": true
+    },
+    "endpoint_/stats": {
+      "status": 200,
+      "responds": true
+    },
+    "endpoint_/catalog": {
+      "status": 200,
+      "responds": true
+    }
+  }
+}
