@@ -1,0 +1,28 @@
+{
+  "server": {
+    "port": 9292,
+    "host": "0.0.0.0"
+  },
+  "corpus": {
+    "manifest": "/home/yeblad/oe-benchmark/chat/corpus_v90_50b/manifest.jsonl",
+    "storage": "/home/yeblad/oe-benchmark/chat/corpus_v90_50b/storage.bin",
+    "chapter_guide": "/home/yeblad/oe-benchmark/chat/corpus_v90_50b/chapter_guide.json"
+  },
+  "llm": {
+    "enabled": false
+  },
+  "reranker": {
+    "enabled": false
+  },
+  "scanner": {
+    "enabled": true,
+    "model": "qwen/qwen3-235b-a22b",
+    "url": "https://openrouter.ai/api/v1/chat/completions",
+    "max_candidates": 64,
+    "max_keep": 8,
+    "max_tokens": 5,
+    "temperature": 0,
+    "timeout_sec": 10,
+    "batch_size": 8
+  }
+}

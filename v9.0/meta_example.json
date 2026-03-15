@@ -1,0 +1,16 @@
+{
+  "version": "9.1",
+  "description": "Multi-segment corpus: 10 segments of 5B tokens each",
+  "segments": [
+    {"id": 0, "dir": "seg_000", "tokens": 5000000000},
+    {"id": 1, "dir": "seg_001", "tokens": 5000000000},
+    {"id": 2, "dir": "seg_002", "tokens": 5000000000},
+    {"id": 3, "dir": "seg_003", "tokens": 5000000000},
+    {"id": 4, "dir": "seg_004", "tokens": 5000000000},
+    {"id": 5, "dir": "seg_005", "tokens": 5000000000},
+    {"id": 6, "dir": "seg_006", "tokens": 5000000000},
+    {"id": 7, "dir": "seg_007", "tokens": 5000000000},
+    {"id": 8, "dir": "seg_008", "tokens": 5000000000},
+    {"id": 9, "dir": "seg_009", "tokens": 5000000000}
+  ]
+}
