@@ -1,8 +1,8 @@
 # Ocean Eterna v7.11 / v8.0 / v9.0
 
-**96% recall accuracy across 1 billion tokens. 12ms. 2.5GB RAM. No GPU.**
+**90.5% recall at 50 billion tokens. 2GB RAM. No GPU.**
 
-Ocean Eterna is a BM25 search engine that finds the right answer 96 out of 100 times across a billion tokens of text — tested on 200 ground-truth questions with mechanical scoring, no LLM judge. Pure C++, runs on a laptop.
+Ocean Eterna is a BM25 search engine — 96% recall at 1B tokens, 90.5% at 50B tokens. Tested on 200 ground-truth questions with mechanical scoring, no LLM judge. Pure C++, runs on a laptop.
 
 ## Scale Tiers
 
@@ -11,7 +11,7 @@ Ocean Eterna is a BM25 search engine that finds the right answer 96 out of 100 t
 | **OE-Kraken** | Up to 2.5B tokens | 96% | 1-2.5 GB | <12ms | Production ready |
 | **OE-Leviathan** | 2.5B - 15B tokens | 94-96% | 3-18 GB | <16ms | Production ready |
 | **OE-Poseidon** | 15B - 30B tokens | ~92% | 10-20 GB | <20ms | Coming soon |
-| **OE-Oceanus** | 30B - 50B tokens | TBD | TBD | TBD | In development |
+| **OE-Oceanus** | 30B - 50B tokens | 90.5% | ~2 GB | ~20ms | Production ready |
 
 ## Versions in This Repo
 
@@ -86,6 +86,7 @@ Tested on i9-14900KS / 96GB DDR5 / NVMe SSD:
 | 1B tokens | OE-Kraken | 96.0% | 53.0% | 92.0% | 2,484 MB | 11.94ms |
 | 5B tokens | OE-Leviathan | 94.5% | 40.5% | 86.0% | 12,221 MB | 13.4ms |
 | 10B tokens | OE-Leviathan | 94.0% | 52.0% | 82.0% | 17,738 MB | 15.5ms |
+| 50B tokens | OE-Oceanus | 90.5% | 51.5% | 68.0% | ~2 GB | ~20ms |
 
 Indexing speed: 70M tokens/sec.
 
