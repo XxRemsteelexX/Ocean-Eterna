@@ -88,7 +88,16 @@ Tested on i9-14900KS / 96GB DDR5 / NVMe SSD:
 | 10B tokens | OE-Leviathan | 94.0% | 52.0% | 82.0% | 17,738 MB | 15.5ms |
 | 50B tokens | OE-Oceanus | 90.5% | 51.5% | 68.0% | ~2 GB | ~20ms |
 
-Indexing speed: 70M tokens/sec.
+Build times on i9-14900KS / 96GB DDR5:
+
+| Scale | Build Time | Build RAM |
+|-------|-----------|-----------|
+| 1B | 53s | 1,814 MB |
+| 5B | 5.6 min | 8,804 MB |
+| 10B | 10.8 min | 13,855 MB |
+| 50B (20 segments) | ~2.5 hours | ~2 GB per segment |
+
+Indexing throughput: ~19M tokens/sec. 50B build runs 20 segments in parallel with 4 threads each.
 
 ## API
 
