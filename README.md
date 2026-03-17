@@ -1,117 +1,138 @@
-# Ocean Eterna v7.11 / v8.0 / v9.0
+# Ocean Eterna
 
-**90.5% recall at 50 billion tokens. 2GB RAM. No GPU.**
+**91% Recall@8 at 50 billion tokens. 37-second cold start. Sub-100ms search. No GPU.**
 
-Ocean Eterna is a BM25 search engine — 96% recall at 1B tokens, 90.5% at 50B tokens. Tested on 200 ground-truth questions with mechanical scoring, no LLM judge. Pure C++, runs on a laptop.
+Ocean Eterna is a BM25 search engine built in C++. 99.5% recall at 500M tokens, 97% at 1B, 91% at 50B. Tested on 200 ground-truth questions with mechanical scoring, no LLM judge. Single binary, runs on a Raspberry Pi.
 
-## Scale Tiers
+## Product Tiers
 
-| Tier | Range | R@8 | RAM | Latency | Status |
-|------|-------|-----|-----|---------|--------|
-| **OE-Kraken** | Up to 2.5B tokens | 96% | 1-2.5 GB | <12ms | Production ready |
-| **OE-Leviathan** | 2.5B - 15B tokens | 94-96% | 3-18 GB | <16ms | Production ready |
-| **OE-Poseidon** | 15B - 30B tokens | ~92% | 10-20 GB | <20ms | Coming soon |
-| **OE-Oceanus** | 30B - 50B tokens | 90.5% | ~2 GB | ~20ms | Production ready |
+| Tier | Engine | Range | R@8 | RAM | Search p50 | Architecture |
+|------|--------|-------|-----|-----|-----------|-------------|
+| **OE Kraken** | v9.0 | 20M-4B tokens | 96-99.5% | 38 MB - 2.1 GB | 1.6-41ms | Single mmap inverted index |
+| **OE Leviathan** | v9.3 | 5B-50B+ tokens | 90-95% | 3-12 GB | 20-92ms | Multi-segment (2.5B per segment) |
 
-## Versions in This Repo
+**OE Kraken** is the flagship. v9.0 mmap inverted index achieves the highest recall at any scale up to 4B tokens in minimal RAM. Runs on anything from a Raspberry Pi to a workstation.
 
-### v7.11 (OE-Kraken)
-The 1B champion. In-memory BM25 with TF-squared-IDF keyword scoring and cap-200 keywords per chunk. This configuration is baked into v8.0 as the default — there is no separate v7.11 binary.
+**OE Leviathan** is the enterprise tier. v9.3 multi-segment architecture splits corpus into independent 2.5B-token segments, searches all in parallel (OpenMP), merges results. 91% R@8 at 50B tokens (9.5M chunks) with 37-second cold start.
 
-### v8.0 (OE-Leviathan)
-Streaming builder + modular shards for 5B-15B scale. Builds corpora in low-memory streaming passes, then serves via modular shard architecture.
+## Benchmark Results
 
-- `ocean_chat_server.cpp` — HTTP chat server with BM25 search + LLM integration
-- `bulk_build.cpp` — streaming corpus builder (low-memory, handles 5B+ tokens)
-- `search_engine.hpp` — BM25 TAAT search with TF-squared-IDF, Porter stemming
-- `binary_manifest.hpp` — serialized index format
-- `mmap_index.hpp` — zero-copy memory-mapped index
-- `porter_stemmer.hpp` — Porter stemming implementation
+### OE Kraken (v9.0, single segment)
 
-### v9.0 (OE-Poseidon / OE-Oceanus)
-Two-pass disk-backed builder + mmap inverted index + multi-segment architecture. Adds hot-reloadable segments and per-segment BM25 for 15B+ scale.
+| Scale | R@8 | Hard R@8 | RAM | p50 | Build (1x) |
+|-------|-----|----------|-----|-----|-----------|
+| 20M | 99.0% | 96.0% | 38 MB | 1.6ms | 1.8s |
+| 50M | 98.0% | 92.0% | 61 MB | 3.0ms | 4.5s |
+| 250M | 99.0% | 96.0% | 557 MB | 8.9ms | 21.6s |
+| 500M | **99.5%** | 100% | 259 MB | 12.5ms | 51.6s |
+| 1B | **97.0%** | 88.0% | 319 MB | 10.7ms | ~100s |
+| 2B | 99.0% | 96.0% | 1.5 GB | 30.1ms | ~6min |
+| 3B | 98.0% | 92.0% | 2.1 GB | 40.9ms | ~10min |
+| 4B | 96.0% | 84.0% | 2.1 GB | 12.6ms | ~13min |
 
-Additional files:
-- `config.hpp` — configuration constants
-- `llm_client.hpp` — LLM reranking client
-- `build_segments.sh` — segment build script
-- `config.json` / `meta_example.json` — example configurations
+200 corpus-verified ground-truth questions per scale. i9-14900KS / 96GB DDR5 / NVMe.
 
-## Dependencies
+### OE Leviathan (v9.3, multi-segment)
 
-Header-only (included in repo root):
-- `json.hpp` — [nlohmann/json](https://github.com/nlohmann/json)
-- `httplib.h` — [cpp-httplib](https://github.com/yhirose/cpp-httplib)
+| Scale | Segs | Chunks | R@8 | Hard R@8 | p50 | Build (1x) | Server Load |
+|-------|------|--------|-----|----------|-----|-----------|-------------|
+| 5B | 2 | 978K | 93.5% | 80.0% | 22ms | 8 min | 7s |
+| 10B | 4 | 1.51M | 95.0% | 82.0% | 20ms | 11 min | 7s |
+| 15B | 6 | 1.74M | 92.0% | 74.0% | 83ms | 24 min | 12s |
+| 20B | 8 | 2.40M | 90.0% | 66.0% | 37ms | 33 min | 12s |
+| 30B | 12 | 4.79M | 93.0% | 76.0% | 49ms | 69 min | 22s |
+| **50B** | **20** | **9.55M** | **91.0%** | 66.0% | **92ms** | **193 min** | **37s** |
 
-System libraries:
-```
-sudo apt install liblz4-dev libcurl4-openssl-dev libzstd-dev
-```
+- **Build time** = one-time offline index creation (done once, segments stored on disk)
+- **Server load** = cold start to serving queries (mmap all segments + load docs)
+- Easy/medium recall never drops below 97% at any scale
 
-## Build
+## Quick Start
 
 ```bash
-# v8.0 server
+# build
 g++ -O3 -std=c++17 -march=native -fopenmp \
-  v8.0/ocean_chat_server.cpp \
+  v9.0/ocean_chat_server.cpp \
   -I. -o ocean_chat_server \
   -llz4 -lcurl -lzstd -lpthread
 
-# v8.0 bulk builder (for 5B+ corpora)
-g++ -O3 -std=c++17 -march=native -fopenmp \
-  v8.0/bulk_build.cpp \
-  -I. -o bulk_build \
-  -llz4 -lzstd -lpthread
-```
-
-## Run
-
-```bash
+# run
+export OCEAN_API_KEY=your_openrouter_key  # optional, for LLM features
 ./ocean_chat_server 8888
-```
 
-Then:
-```bash
+# search
 curl -X POST http://localhost:8888/chat \
   -H "Content-Type: application/json" \
   -d '{"question": "How does authentication work?"}'
 ```
 
-## Benchmark Results
+## Config
 
-Tested on i9-14900KS / 96GB DDR5 / NVMe SSD:
+```json
+{
+  "server": {"port": 8888},
+  "corpus": {
+    "manifest": "corpus/manifest.jsonl",
+    "storage": "corpus/storage.bin",
+    "chapter_guide": "corpus/chapter_guide.json"
+  },
+  "llm": {"use_external": true},
+  "reranker": {"enabled": false},
+  "scanner": {"enabled": false}
+}
+```
 
-| Scale | Tier | R@8 | R@1 | Hard R@8 | RAM | p50 Latency |
-|-------|------|-----|-----|----------|-----|-------------|
-| 1B tokens | OE-Kraken | 96.0% | 53.0% | 92.0% | 2,484 MB | 11.94ms |
-| 5B tokens | OE-Leviathan | 94.5% | 40.5% | 86.0% | 12,221 MB | 13.4ms |
-| 10B tokens | OE-Leviathan | 94.0% | 52.0% | 82.0% | 17,738 MB | 15.5ms |
-| 50B tokens | OE-Oceanus | 90.5% | 51.5% | 68.0% | ~2 GB | ~20ms |
+Multi-segment mode activates automatically when `meta.json` exists in the corpus directory. No config flag needed.
 
-Build times on i9-14900KS / 96GB DDR5:
+## Source Code
 
-| Scale | Build Time | Build RAM |
-|-------|-----------|-----------|
-| 1B | 53s | 1,814 MB |
-| 5B | 5.6 min | 8,804 MB |
-| 10B | 10.8 min | 13,855 MB |
-| 50B (20 segments) | ~2.5 hours | ~2 GB per segment |
+### v9.0 (OE Kraken + OE Leviathan)
 
-Indexing throughput: ~19M tokens/sec. 50B build runs 20 segments in parallel with 4 threads each.
+- `ocean_chat_server.cpp` -- HTTP server with BM25 search, multi-segment support, LLM integration
+- `bulk_build.cpp` -- streaming corpus builder (low-memory, handles 50B+)
+- `search_engine.hpp` -- BM25 search with TF-squared-IDF, multi-segment parallel search, Phase-2 coverage rescoring
+- `mmap_index.hpp` -- zero-copy memory-mapped inverted index
+- `binary_manifest.hpp` -- binary manifest format for fast loading
+- `config.hpp` -- configuration system with env var overrides
+- `porter_stemmer.hpp` -- Porter stemming
+- `build_segments.sh` -- multi-segment build script
+
+### v8.0 (legacy, in-memory)
+
+In-memory BM25 engine. 94-96% R@8 from 1B to 20B, but requires 3-60GB RAM. Superseded by v9.0/v9.3 multi-segment for most use cases.
+
+## Build
+
+See [BUILD.md](BUILD.md) for full instructions.
+
+```bash
+mkdir build && cd build
+cmake ..
+make -j$(nproc)
+```
+
+### Dependencies
+
+Header-only (included): `json.hpp` (nlohmann/json), `httplib.h` (cpp-httplib)
+
+System:
+```
+sudo apt install build-essential cmake libzstd-dev liblz4-dev libcurl4-openssl-dev libomp-dev
+```
 
 ## API
 
 14 endpoints including:
-- `POST /chat` — BM25 search + LLM response
-- `POST /chat/stream` — streaming search (SSE)
-- `POST /add-file` — ingest text content
-- `POST /add-file-path` — ingest from filesystem
-- `GET /stats` — corpus statistics
-- `GET /health` — server health
+- `POST /chat` -- BM25 search + LLM response
+- `POST /chat/stream` -- streaming search (SSE)
+- `POST /search` -- raw BM25 search (no LLM)
+- `POST /add-file` -- ingest text content
+- `GET /stats` -- corpus statistics
+- `GET /health` -- server health
 
 ## License
 
-BSL 1.1 — Free for personal and internal business use. Converts to Apache 2.0 on 2030-03-08.
+BSL 1.1 -- Free for personal and internal business use. Converts to Apache 2.0 on 2030-03-08.
 
 Commercial licensing: [contact chAIn](https://chainlinks.ai/contact)
 

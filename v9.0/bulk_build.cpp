@@ -1,4 +1,5 @@
 // bulk_build.cpp — Two-pass disk-backed corpus builder for Ocean Eterna v9
+// v9.1: Added variant_count TF to mmap posting format
 // v9: Two-pass architecture for 50B+ token corpora under 10GB RAM.
 //
 // Pass 1 (Streaming):
@@ -1238,12 +1239,13 @@ int main(int argc, char** argv) {
             }
             for (size_t i = 0; i < NM; i++) {
                 auto kws = read_chunk_keywords(kw_sorted_mmap.data, all_slim[i].kw_file_offset);
-                unordered_set<string> seen;  // deduplicate stems per chunk
+                // v9.1: emit one entry per keyword-to-stem mapping (no dedup)
+                // so that duplicate (stem, chunk_idx) entries count as variant_count
                 for (const auto& [kid, tf] : kws) {
                     const string& kw = kw_intern.id_to_str[kid];
                     if (kw_df[kid] <= 1 && kw.find('_') != string::npos) continue;
                     const string& stem = kw_stems[kid];
-                    if (seen.insert(stem).second) {
+                    {
                         uint64_t h = 0xcbf29ce484222325ULL;
                         for (char c : stem) { h ^= (uint8_t)c; h *= 0x100000001b3ULL; }
                         int bid = (h >> 56) & 0xFF;
@@ -1281,16 +1283,24 @@ int main(int argc, char** argv) {
             vector<char> raw(bsz);
             { ifstream bf(bp, ios::binary); bf.read(raw.data(), bsz); }
 
-            // count DF per stem (one entry per chunk-stem pair in bucket)
-            unordered_map<string, uint32_t> stem_df;
+            // v9.1: count DF per stem as UNIQUE chunk count (for correct IDF)
+            // since Phase A no longer deduplicates, bucket may have multiple
+            // entries for the same (stem, chunk_idx) pair from different keywords
+            unordered_map<string, unordered_set<uint32_t>> stem_chunks;
             size_t pos = 0;
             while (pos + 6 <= bsz) {
                 uint16_t slen; memcpy(&slen, &raw[pos], 2); pos += 2;
                 if (pos + slen + 4 > bsz) break;
                 string stem(&raw[pos], slen); pos += slen;
-                pos += 4;  // skip chunk_idx (only counting DF here)
-                stem_df[stem]++;
+                uint32_t cidx; memcpy(&cidx, &raw[pos], 4); pos += 4;
+                stem_chunks[stem].insert(cidx);
             }
+            // convert to df counts
+            unordered_map<string, uint32_t> stem_df;
+            for (auto& [stem, chunks] : stem_chunks) {
+                stem_df[stem] = (uint32_t)chunks.size();
+            }
+            stem_chunks.clear();
 
             // convert to sorted StemInfo entries
             vector<StemInfo> bstems;
@@ -1371,12 +1381,13 @@ int main(int argc, char** argv) {
             str_offset += all_stems[i].stem.size();
         }
 
-        // compute posting offsets from cumulative df
+        // v9.1: compute posting offsets — 6 bytes per posting (4 doc_id + 2 variant_count)
+        // layout: [doc_id_0..doc_id_N, tf_0..tf_N] (split for cache friendliness)
         uint32_t cum_post_offset = 0;
         vector<uint32_t> post_offsets(sc);
         for (size_t i = 0; i < sc; i++) {
             post_offsets[i] = cum_post_offset;
-            cum_post_offset += all_stems[i].df * 4;
+            cum_post_offset += all_stems[i].df * 6;
         }
 
         // write directory entries (28 bytes each)
@@ -1451,8 +1462,22 @@ int main(int argc, char** argv) {
                 if (it != stem_postings.end()) {
                     auto& posts = it->second;
                     sort(posts.begin(), posts.end());
-                    posts.erase(unique(posts.begin(), posts.end()), posts.end());
-                    sf.write((char*)posts.data(), posts.size() * 4);
+                    // v9.1: count consecutive duplicates → variant_count per doc_id
+                    // then write split layout: [doc_ids...][tfs...]
+                    vector<uint32_t> unique_docs;
+                    vector<uint16_t> variant_counts;
+                    size_t pi = 0;
+                    while (pi < posts.size()) {
+                        uint32_t doc_id = posts[pi];
+                        uint16_t vc = 1;
+                        while (pi + vc < posts.size() && posts[pi + vc] == doc_id) vc++;
+                        unique_docs.push_back(doc_id);
+                        variant_counts.push_back(vc);
+                        pi += vc;
+                    }
+                    // write doc_ids first, then variant_counts (split layout)
+                    sf.write((char*)unique_docs.data(), unique_docs.size() * 4);
+                    sf.write((char*)variant_counts.data(), variant_counts.size() * 2);
                 }
                 stems_written++;
                 bucket_stem_count++;

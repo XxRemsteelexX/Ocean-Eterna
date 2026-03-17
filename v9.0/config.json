@@ -4,25 +4,30 @@
     "host": "0.0.0.0"
   },
   "corpus": {
-    "manifest": "/home/yeblad/oe-benchmark/chat/corpus_v90_50b/manifest.jsonl",
-    "storage": "/home/yeblad/oe-benchmark/chat/corpus_v90_50b/storage.bin",
-    "chapter_guide": "/home/yeblad/oe-benchmark/chat/corpus_v90_50b/chapter_guide.json"
+    "manifest": "corpus/manifest.jsonl",
+    "storage": "corpus/storage.bin",
+    "chapter_guide": "corpus/chapter_guide.json"
   },
   "llm": {
-    "enabled": false
+    "use_external": true,
+    "external_url": "https://openrouter.ai/api/v1/chat/completions",
+    "external_model": "qwen/qwen3-30b-a3b",
+    "timeout_sec": 30,
+    "max_retries": 2,
+    "retry_backoff_ms": 1000
   },
   "reranker": {
     "enabled": false
   },
   "scanner": {
-    "enabled": true,
-    "model": "qwen/qwen3-235b-a22b",
+    "enabled": false,
+    "model": "qwen/qwen3-30b-a3b",
     "url": "https://openrouter.ai/api/v1/chat/completions",
-    "max_candidates": 64,
+    "max_candidates": 16,
     "max_keep": 8,
     "max_tokens": 5,
     "temperature": 0,
     "timeout_sec": 10,
-    "batch_size": 8
+    "batch_size": 32
   }
 }

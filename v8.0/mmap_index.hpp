@@ -1,4 +1,5 @@
 #pragma once
+// v9.1: Added variant_count TF to mmap posting format
 // OceanEterna v8.0 — mmap-based inverted index
 // Eliminates in-memory hash maps: server RAM drops from ~89GB to ~5GB at 50B scale
 //
@@ -170,14 +171,23 @@ struct MmapIndex {
     }
 
     // binary search for a stem. returns posting list pointer + count + df, or {nullptr, 0, 0}
+    // v9.1: split layout — postings[count] doc_ids followed by tfs[count] variant_counts
     struct LookupResult {
-        const uint32_t* postings;
+        const uint32_t* postings;  // doc_id array
+        const uint16_t* tfs;       // variant_count array (right after postings)
         uint32_t count;
         uint32_t df;
     };
 
+    // v9.1: helper to build LookupResult with split-layout pointers
+    LookupResult make_lookup_result(const StemEntry& entry) const {
+        const uint32_t* post = (const uint32_t*)(postings + entry.posting_offset);
+        const uint16_t* tf = (const uint16_t*)(postings + entry.posting_offset + entry.posting_count * sizeof(uint32_t));
+        return {post, tf, entry.posting_count, entry.df};
+    }
+
     LookupResult lookup_stem(const std::string& stem) const {
-        if (stem_count == 0) return {nullptr, 0, 0};
+        if (stem_count == 0) return {nullptr, nullptr, 0, 0};
 
         uint64_t target_hash = fnv1a_64(stem.data(), stem.size());
 
@@ -195,9 +205,8 @@ struct MmapIndex {
                 // hash match - verify string
                 const char* s = (const char*)(stem_strings + entry.str_offset);
                 if (entry.str_len == stem.size() && memcmp(s, stem.data(), stem.size()) == 0) {
-                    // found
-                    const uint32_t* post = (const uint32_t*)(postings + entry.posting_offset);
-                    return {post, entry.posting_count, entry.df};
+                    // found — v9.1: split layout [doc_ids | tfs]
+                    return make_lookup_result(entry);
                 }
                 // hash collision - scan both directions
                 for (uint64_t i = mid; i > 0; ) {
@@ -206,7 +215,7 @@ struct MmapIndex {
                     if (e2.hash != target_hash) break;
                     const char* s2 = (const char*)(stem_strings + e2.str_offset);
                     if (e2.str_len == stem.size() && memcmp(s2, stem.data(), stem.size()) == 0) {
-                        return {(const uint32_t*)(postings + e2.posting_offset), e2.posting_count, e2.df};
+                        return make_lookup_result(e2);
                     }
                 }
                 for (uint64_t i = mid + 1; i < stem_count; i++) {
@@ -214,13 +223,13 @@ struct MmapIndex {
                     if (e2.hash != target_hash) break;
                     const char* s2 = (const char*)(stem_strings + e2.str_offset);
                     if (e2.str_len == stem.size() && memcmp(s2, stem.data(), stem.size()) == 0) {
-                        return {(const uint32_t*)(postings + e2.posting_offset), e2.posting_count, e2.df};
+                        return make_lookup_result(e2);
                     }
                 }
-                return {nullptr, 0, 0}; // hash collision but string didn't match
+                return {nullptr, nullptr, 0, 0}; // hash collision but string didn't match
             }
         }
-        return {nullptr, 0, 0};
+        return {nullptr, nullptr, 0, 0};
     }
 
     // get keyword IDs for a document (Phase 2 rescoring)

@@ -1,3 +1,4 @@
+// Vendored: cpp-httplib v0.18.3 — https://github.com/yhirose/cpp-httplib
 //
 //  httplib.h
 //

@@ -1,4 +1,5 @@
 // bulk_build.cpp — Two-pass disk-backed corpus builder for Ocean Eterna v9
+// v9.1: Added variant_count TF to mmap posting format
 // v9: Two-pass architecture for 50B+ token corpora under 10GB RAM.
 //
 // Pass 1 (Streaming):
@@ -1317,16 +1318,13 @@ int main(int argc, char** argv) {
             str_offset += all_stems[i].stem.size();
         }
 
-        // posting offsets are computed per-bucket — we write placeholder directory entries
-        // and patch them after building all posting lists
-        // BUT: we need posting count + offset per stem to write directory.
-        // The posting count = df (already known). The offset depends on cumulative sizes.
-        // Since we process buckets in order, we can compute cumulative offsets.
+        // v9.1: posting offsets — 6 bytes per posting (4 doc_id + 2 variant_count)
+        // layout: [doc_id_0..doc_id_N, tf_0..tf_N] (split for cache friendliness)
         uint32_t cum_post_offset = 0;
         vector<uint32_t> post_offsets(sc);
         for (size_t i = 0; i < sc; i++) {
             post_offsets[i] = cum_post_offset;
-            cum_post_offset += all_stems[i].df * 4;
+            cum_post_offset += all_stems[i].df * 6;
         }
 
         // write directory entries (28 bytes each)
@@ -1367,27 +1365,37 @@ int main(int argc, char** argv) {
 
             for (size_t i = 0; i < NM; i++) {
                 auto kws = read_chunk_keywords(kw_sorted_mmap.data, all_slim[i].kw_file_offset);
-                unordered_set<uint32_t> chunk_stem_idxs;
+                // v9.1: emit one entry per keyword-to-stem mapping (no dedup)
+                // so that duplicate chunk_idx entries count as variant_count
                 for (const auto& [kid, tf] : kws) {
                     const string& kw = kw_intern.id_to_str[kid];
                     if (kw_df[kid] <= 1 && kw.find('_') != string::npos) continue;
                     uint32_t sidx = kw_stem_sorted_idx[kid];
                     if (sidx == UINT32_MAX) continue;
                     if (sidx >= b_start && sidx < b_end) {
-                        chunk_stem_idxs.insert(sidx);
+                        bucket_postings[sidx - b_start].push_back(i);
                     }
-                }
-                for (uint32_t sidx : chunk_stem_idxs) {
-                    bucket_postings[sidx - b_start].push_back(i);
                 }
             }
 
-            // sort + dedup and write posting lists for this bucket
+            // v9.1: sort, count consecutive duplicates → variant_count per doc_id
+            // then write split layout: [doc_ids...][tfs...]
             for (size_t si = 0; si < b_size; si++) {
                 auto& posts = bucket_postings[si];
                 sort(posts.begin(), posts.end());
-                posts.erase(unique(posts.begin(), posts.end()), posts.end());
-                sf.write((char*)posts.data(), posts.size() * 4);
+                vector<uint32_t> unique_docs;
+                vector<uint16_t> variant_counts;
+                size_t pi = 0;
+                while (pi < posts.size()) {
+                    uint32_t doc_id = posts[pi];
+                    uint16_t vc = 1;
+                    while (pi + vc < posts.size() && posts[pi + vc] == doc_id) vc++;
+                    unique_docs.push_back(doc_id);
+                    variant_counts.push_back(vc);
+                    pi += vc;
+                }
+                sf.write((char*)unique_docs.data(), unique_docs.size() * 4);
+                sf.write((char*)variant_counts.data(), variant_counts.size() * 2);
             }
 
             if (N_BUCKETS > 1) {

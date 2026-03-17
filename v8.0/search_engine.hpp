@@ -1,4 +1,5 @@
 #pragma once
+// v9.1: Added variant_count TF to mmap posting format
 // OceanEterna v8.0 Search Engine — mmap index + legacy fallback
 // BM25 TAAT search with Porter stemming, shard-parallel search, and keyword extraction
 // Requires: porter_stemmer.hpp, Corpus/Hit structs, g_config, g_stem_cache, g_stem_to_keywords
@@ -601,9 +602,8 @@ inline std::vector<Hit> search_shard_bm25_mmap(const Shard& shard, const MmapInd
             auto dk = midx.get_doc_keywords(doc_idx);
             int doc_len = dk.count;
 
-            // tf=1 for mmap path (TF stored at keyword level, not per-stem;
-            // BM25 with tf=1 is the baseline and matches legacy behavior)
-            double tf = 1.0;
+            // v9.1: use variant_count from posting list as TF
+            double tf = (double)result.tfs[pi];
             double dl_ratio = (double)doc_len / avgdl;
             double score = idf * (tf * (k1 + 1.0)) / (tf + k1 * (1.0 - b_param + b_param * dl_ratio));
             scores[doc_idx] += score;
