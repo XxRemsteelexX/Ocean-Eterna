@@ -1,0 +1,25 @@
+{
+  "server": {
+    "port": 9292,
+    "host": "0.0.0.0"
+  },
+  "corpus": {
+    "manifest": "corpus/manifest.jsonl",
+    "storage": "corpus/storage.bin",
+    "chapter_guide": "corpus/chapter_guide.json"
+  },
+  "llm": {
+    "enabled": true,
+    "use_external": false,
+    "local_url": "http://localhost:11434/v1/chat/completions",
+    "local_model": "qwen3:8b",
+    "timeout_sec": 30,
+    "max_retries": 2
+  },
+  "reranker": {
+    "enabled": false
+  },
+  "scanner": {
+    "enabled": false
+  }
+}
